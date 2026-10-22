@@ -20,11 +20,15 @@ async function api(path, data) {
   }
   return response.json();
 }
-function status(message, success = false) { $('#status').textContent = message; $('#status').classList.toggle('success', success); }
+function text(el,value){if(el.textContent!==value)el.textContent=value;}
+function attribute(el,name,value){if(el.getAttribute(name)!==value)el.setAttribute(name,value);}
+function disabled(el,value){if(el.disabled!==value)el.disabled=value;}
+function status(message, success = false) { text($('#status'),message); $('#status').classList.toggle('success', success); }
 function profileView() {
-  $('#profile-button').textContent = me.name;
-  $('#total').replaceChildren(document.createTextNode(me.points + ' '), Object.assign(document.createElement('small'), {textContent:'pt'}));
-  $('#clear-count').textContent = me.clears + ' 問クリア';
+  text($('#profile-button'),me.name);
+  const points=me.points+' ';
+  if($('#total').firstChild.nodeValue!==points)$('#total').firstChild.nodeValue=points;
+  text($('#clear-count'),me.clears+' 問クリア');
 }
 function openProfile() { $('#name').value = me?.name || ''; $('#profile-dialog').showModal(); }
 $('#profile-button').onclick = openProfile;
@@ -49,7 +53,7 @@ function commit(prev) {
   if(prev.some((v,i)=>v!==cells[i])){undo.push(prev);if(undo.length>500)undo.shift();}
   save();render();
 }
-function applyGame(state, loadMemos=false) {
+function applyGame(state, loadMemos=false, draw=true) {
   if(loadMemos)input.reset();
   game=state;puzzle=state.puzzle;level=puzzle.difficulty;
   if(loadMemos) {
@@ -67,7 +71,7 @@ function applyGame(state, loadMemos=false) {
   game.stars.forEach(([r,c])=>cells[r*puzzle.size+c]=1);
   if(ended()){moveQueue=[];saveQueue();}
   document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',b.dataset.level===level));
-  render();
+  if(draw)render();
 }
 function gameMessage() {
   if(game.completed)status(`クリア！ ✦ 残機 ${game.score} = +${game.score} pt。次の問題に挑戦しよう。`,true);
@@ -76,9 +80,9 @@ function gameMessage() {
 }
 function controls() {
   const changing=busy||sending||moveQueue.length>0;
-  for(const selector of ['#advance','#next','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]']) $(selector).disabled=changing;
-  $('#undo').disabled=busy||ended()||!undo.length;
-  $('#reset').disabled=busy||ended();
+  for(const selector of ['#advance','#next','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]']) disabled($(selector),changing);
+  disabled($('#undo'),busy||ended()||!undo.length);
+  disabled($('#reset'),busy||ended());
   $('#retry-moves').hidden=!moveQueue.length||sending;
 }
 async function choose(next=false) {
@@ -109,21 +113,23 @@ function renderCell(button,i) {
   const glyph=value===1||pending?'★':value===2?'×':'';
   const mark=button.firstElementChild;
   if(mark.textContent!==glyph)mark.textContent=glyph;
-  mark.className=value===2&&!pending?'mark':'';
-  button.setAttribute('aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':'空白'}`);
+  const markClass=value===2&&!pending?'mark':'';
+  if(mark.className!==markClass)mark.className=markClass;
+  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':'空白'}`);
 }
 function render() {
   if(!puzzle)return;
   const n=puzzle.size,board=$('#board');
-  $('#puzzle-label').textContent=`${label[level]} / ${puzzle.id.slice(0,8).toUpperCase()}`;
-  $('#puzzle-title').textContent=game.completed?'クリア！ 次の星を探そう ✦':game.game_over?'もう一度、ひらめこう。':'星の居場所を見つけよう。';
-  $('#lives').replaceChildren();
-  for(let i=0;i<3;i++)$('#lives').append(Object.assign(document.createElement('span'),{textContent:'♥',className:i<game.lives?'':'lost'}));
-  $('#lives').setAttribute('aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
-  $('#advance').textContent=game.completed?'次の問題に挑戦 →':game.game_over?'新しい問題で再挑戦 →':'新しい問題に挑戦 →';
+  text($('#puzzle-label'),`${label[level]} / ${puzzle.id.slice(0,8).toUpperCase()}`);
+  text($('#puzzle-title'),game.completed?'クリア！ 次の星を探そう ✦':game.game_over?'もう一度、ひらめこう。':'星の居場所を見つけよう。');
+  const hearts=$('#lives');
+  if(hearts.children.length!==3)hearts.replaceChildren(...Array.from({length:3},()=>Object.assign(document.createElement('span'),{textContent:'♥'})));
+  [...hearts.children].forEach((heart,i)=>heart.classList.toggle('lost',i>=game.lives));
+  attribute(hearts,'aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
+  text($('#advance'),game.completed?'次の問題に挑戦 →':game.game_over?'新しい問題で再挑戦 →':'新しい問題に挑戦 →');
   $('#game-over').hidden=!game.game_over;
-  $('#auto-cross').textContent=`自動で× ${autoCross?'ON':'OFF'}`;
-  $('#auto-cross').setAttribute('aria-pressed',String(autoCross));
+  text($('#auto-cross'),`自動で× ${autoCross?'ON':'OFF'}`);
+  attribute($('#auto-cross'),'aria-pressed',String(autoCross));
   if(board.dataset.puzzle!==puzzle.id){
     board.replaceChildren();board.dataset.puzzle=puzzle.id;
     board.style.gridTemplateColumns=`repeat(${n},minmax(0,1fr))`;
@@ -163,7 +169,7 @@ async function pumpMoves() {
     while(moveQueue.length&&!ended()){
       const move=moveQueue[0],result=await api(`games/${game.id}/stars`,move);
       moveQueue.shift();saveQueue();
-      me=result.player;profileView();applyGame(result.game);
+      me=result.player;profileView();applyGame(result.game,false,false);
       const index=move.row*puzzle.size+move.col,prev=cells.slice();
       if(result.correct)autoMark();else cells[index]=2;
       commit(prev);
@@ -184,7 +190,8 @@ const input=attachBoardInput($('#board'),{
     // Only revert this tap: another star response may have added notes between taps.
     if(cells[i]!==1&&!waiting(i))cells[i]=base[i]===2?2:0;
     const entry=undo.indexOf(base);if(entry!==-1)undo.splice(entry,1);
-    save();render();
+    // star() renders the restored note and pending star together; no blank intermediate frame.
+    save();
   },star
 });
 $('#retry-moves').onclick=pumpMoves;
@@ -240,7 +247,7 @@ document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.datas
 function updateTimer() {
   if(!game)return;
   const seconds=(game.completed || game.game_over)?game.seconds:Math.max(0,Math.floor(Date.now()/1000-game.started_at));
-  $('#timer').textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
+  text($('#timer'),`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`);
 }
 setInterval(updateTimer,1000);
 (async()=>{
