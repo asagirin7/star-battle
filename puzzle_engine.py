@@ -6,7 +6,7 @@ import time
 import threading
 
 EXPERT_POINTS = 100
-LEVELS = {'easy': (6, 3), 'medium': (7, 6), 'hard': (8, 9), 'expert': (9, EXPERT_POINTS)}
+LEVELS = {'easy': (6, 3), 'medium': (7, 6), 'hard': (8, 9), 'expert': (9, EXPERT_POINTS), 'expert_relaxed': (9, EXPERT_POINTS)}
 INITIAL_LIVES = 3
 
 
@@ -62,10 +62,10 @@ def fingerprint(regions):
     return hashlib.sha256(json.dumps(normalized).encode()).hexdigest()
 
 
-def valid_area(regions, area):
+def valid_area(regions, area, relaxed=False):
     n = len(regions)
     cells = {(r,c) for r in range(n) for c in range(n) if regions[r][c] == area}
-    if len(cells) < 3 or len({r for r,c in cells}) < 2 or len({c for r,c in cells}) < 2:
+    if len(cells) < (2 if relaxed else 3) or (not relaxed and (len({r for r,c in cells}) < 2 or len({c for r,c in cells}) < 2)):
         return False
     seen = {next(iter(cells))}
     todo = list(seen)
@@ -77,11 +77,18 @@ def valid_area(regions, area):
     return seen == cells
 
 
-def challenging_regions(regions, cols, rng, deadline):
+def easier_clues(regions):
+    counts = [sum(row.count(i) for row in regions) for i in range(len(regions))]
+    return counts.count(2) >= 2
+
+
+def challenging_regions(regions, cols, rng, deadline, relaxed=False):
     """Refine connected areas while preserving the planted solution."""
     n = len(regions)
     fixed = {(r,c) for r,c in enumerate(cols)}
-    if not all(valid_area(regions,i) for i in range(n)):
+    if not all(valid_area(regions,i,relaxed) for i in range(n)):
+        return False
+    if relaxed and not easier_clues(regions):
         return False
     current = solutions(regions, limit=100)
     for _ in range(250):
@@ -102,7 +109,7 @@ def challenging_regions(regions, cols, rng, deadline):
         for r,c,target in candidates:
             old = regions[r][c]
             regions[r][c] = target
-            if valid_area(regions,old) and valid_area(regions,target):
+            if valid_area(regions,old,relaxed) and valid_area(regions,target,relaxed) and (not relaxed or easier_clues(regions)):
                 possible = solutions(regions, limit=100)
                 if len(possible) <= len(current):
                     current = possible;changed = True
@@ -128,9 +135,9 @@ def _generate(difficulty, rng=None, timeout=5):
         frontier = list(enumerate(cols))
         sizes = [1]*n
         while frontier:
-            if difficulty == 'expert':
+            if difficulty in {'expert','expert_relaxed'}:
                 smallest = min(sizes[regions[r][c]] for r,c in frontier)
-                choices = [(r,c) for r,c in frontier if sizes[regions[r][c]] == smallest] if smallest < 4 else frontier
+                choices = [(r,c) for r,c in frontier if sizes[regions[r][c]] == smallest] if smallest < (2 if difficulty == 'expert_relaxed' else 4) else frontier
                 r,c = rng.choice(choices)
             else:
                 r, c = rng.choice(frontier)
@@ -143,7 +150,7 @@ def _generate(difficulty, rng=None, timeout=5):
             regions[rr][cc] = regions[r][c]
             sizes[regions[r][c]] += 1
             frontier.append((rr, cc))
-        if difficulty == 'expert' and not challenging_regions(regions, cols, rng, deadline):
+        if difficulty in {'expert','expert_relaxed'} and not challenging_regions(regions, cols, rng, deadline, difficulty == 'expert_relaxed'):
             continue
         if len(solutions(regions)) == 1:
             return dict(size=n, difficulty=difficulty, points=points, regions=regions,
@@ -152,12 +159,14 @@ def _generate(difficulty, rng=None, timeout=5):
 
 
 _expert_lock = threading.Lock()
-_expert_seed = None
+_expert_seeds = {}
 
 
 def vary_expert(seed, rng):
     """Walk between unique boards, retaining connectivity and area constraints."""
     n = seed['size']
+    difficulty = seed.get('difficulty','expert')
+    relaxed = difficulty == 'expert_relaxed'
     regions = [row[:] for row in seed['regions']]
     stars = set(enumerate(seed['solution']))
     for _ in range(rng.randrange(4)):
@@ -178,7 +187,7 @@ def vary_expert(seed, rng):
         for target in targets:
             old = regions[r][c]
             regions[r][c] = target
-            if valid_area(regions,old) and valid_area(regions,target) and len(solutions(regions)) == 1:
+            if valid_area(regions,old,relaxed) and valid_area(regions,target,relaxed) and (not relaxed or easier_clues(regions)) and len(solutions(regions)) == 1:
                 changed += 1
                 break
             regions[r][c] = old
@@ -186,29 +195,32 @@ def vary_expert(seed, rng):
             break
     if not changed:
         return None
-    return dict(size=n, difficulty='expert', points=EXPERT_POINTS, regions=regions,
+    return dict(size=n, difficulty=difficulty, points=EXPERT_POINTS, regions=regions,
                 solution=cols, fingerprint=fingerprint(regions))
 
 
 
 def seed_expert(puzzle):
     """Restore a private starting layout after a process restart."""
-    global _expert_seed
+    difficulty = puzzle['difficulty']
+    relaxed = difficulty == 'expert_relaxed'
     with _expert_lock:
-        if _expert_seed is None and puzzle['size'] == 9:
+        if difficulty not in _expert_seeds and puzzle['size'] == 9:
             regions = puzzle['regions']
-            if all(valid_area(regions,i) for i in range(9)) and solutions(regions) == [puzzle['solution']]:
-                _expert_seed = puzzle
+            if (all(valid_area(regions,i,relaxed) for i in range(9))
+                    and (not relaxed or easier_clues(regions))
+                    and solutions(regions) == [puzzle['solution']]):
+                _expert_seeds[difficulty] = puzzle
 
 
 def generate(difficulty, rng=None, timeout=5):
-    global _expert_seed
     # Keep seeded generation reproducible. Live challenges reuse only a private
     # starting layout, changing the areas and rechecking uniqueness every time.
-    if difficulty != 'expert' or rng is not None:
+    if difficulty not in {'expert','expert_relaxed'} or rng is not None:
         return _generate(difficulty,rng,timeout)
     with _expert_lock:
-        varied = vary_expert(_expert_seed,random.SystemRandom()) if _expert_seed else None
+        seed = _expert_seeds.get(difficulty)
+        varied = vary_expert(seed,random.SystemRandom()) if seed else None
         result = varied or _generate(difficulty,timeout=timeout)
-        _expert_seed = result
+        _expert_seeds[difficulty] = result
         return result

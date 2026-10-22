@@ -149,6 +149,23 @@ with sync_playwright() as p:
         terminal(page,'ゲームオーバー')
         expect(page.locator('.cell')).to_have_count(81)
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 1回')
+        page.locator('#expert-mode').click()
+        expect(page.locator('#puzzle-label')).to_contain_text('8 × 8相当')
+        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 1、ミス 0回')
+        relaxed=page.request.get(BASE_URL+'/api/games/current?difficulty=expert_relaxed').json()
+        areas=relaxed['puzzle']['regions']
+        counts=[sum(row.count(i) for row in areas) for i in range(9)]
+        assert min(counts)>=2 and counts.count(2)>=2
+        for r,c in enumerate(solutions(areas)[0]):move(page,r,c,9)
+        terminal(page,'クリア！ ✦')
+        expect(page.locator('#result-message')).to_have_text('ノーミスクリア！ +100 pt')
+        expect(page.locator('#total')).to_contain_text('205')
+        page.reload()
+        terminal(page,'クリア！ ✦')
+        expect(page.locator('#puzzle-label')).to_contain_text('8 × 8相当')
+        page.locator('#expert-mode').click()
+        expect(page.locator('#puzzle-label')).to_contain_text('EXPERT')
+        terminal(page,'ゲームオーバー')
         assert not page.locator('.cell').evaluate_all("(cells)=>cells.some(b=>!b.style.background)")
         page.locator('[data-level="easy"]').click()
         expect(page.locator('.cell')).to_have_count(36)

@@ -56,7 +56,7 @@ def wrong_col(game):
 
 
 def test_generated_unique_connected_and_varied():
-    for level in ['easy','medium','hard','expert']:
+    for level in ['easy','medium','hard','expert','expert_relaxed']:
         fingerprints = set()
         for seed in range(6):
             p = generate(level, random.Random(seed))
@@ -67,6 +67,8 @@ def test_generated_unique_connected_and_varied():
             n=p['size']
             for region in range(n):
                 cells={(r,c) for r in range(n) for c in range(n) if p['regions'][r][c]==region}
+                if level == 'expert_relaxed':
+                    assert len(cells) >= 2
                 if level == 'expert':
                     assert len(cells) >= 3
                     assert len({r for r,c in cells}) >= 2
@@ -203,9 +205,10 @@ def test_asset_urls_change_with_content_and_revalidate(client):
     assert main.ASSET_VERSION==expected
 
 
-def test_expert_one_mistake_fails_and_clear_is_fixed_100(client):
+@pytest.mark.parametrize('level',['expert','expert_relaxed'])
+def test_expert_one_mistake_fails_and_clear_is_fixed_100(client,level):
     register(client)
-    game=start(client,'expert')
+    game=start(client,level)
     assert game['lives']==game['puzzle']['initial_lives']==1
     assert game['puzzle']['points']==100
     assert game['puzzle']['scoring']=='fixed'
@@ -215,11 +218,11 @@ def test_expert_one_mistake_fails_and_clear_is_fixed_100(client):
     assert failed['game']['game_over'] and failed['game']['lives']==0
     repeat=star(client,game,0,wrong_col(game),request_id)
     assert repeat['game']['mistakes']==1
-    assert client.get('/api/games/current?difficulty=expert').json()['game_over']
+    assert client.get(f'/api/games/current?difficulty={level}').json()['game_over']
     result=solved(client,game)
     assert result['game']['game_over'] and not result['game']['completed']
     assert result['player']['points']==0
-    fresh=start(client,'expert')
+    fresh=start(client,level)
     assert fresh['lives']==1
     result=solved(client,fresh)
     assert result['game']['completed'] and result['game']['score']==100
@@ -229,12 +232,15 @@ def test_expert_one_mistake_fails_and_clear_is_fixed_100(client):
 
 
 
-def test_expert_variants_keep_unique_connected_nontrivial_areas():
+@pytest.mark.parametrize('level',['expert','expert_relaxed'])
+def test_expert_variants_keep_unique_connected_nontrivial_areas(level):
     from puzzle_engine import valid_area
     seen=set()
     for _ in range(16):
-        puzzle=generate('expert')
+        puzzle=generate(level)
         assert puzzle['fingerprint'] not in seen
         seen.add(puzzle['fingerprint'])
         assert solutions(puzzle['regions'])==[puzzle['solution']]
-        assert all(valid_area(puzzle['regions'],area) for area in range(9))
+        assert all(valid_area(puzzle['regions'],area,level=='expert_relaxed') for area in range(9))
+        if level=='expert_relaxed':
+            assert sum(sum(row.count(i) for row in puzzle['regions'])==2 for i in range(9))>=2

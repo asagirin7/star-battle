@@ -1,13 +1,14 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const colors = ['#b8c8df','#e7c4ae','#c5d4b4','#d2bfde','#e4d59f','#a9d2d2','#dbb6c4','#c0c1e4','#9cc8a0'];
-const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT'};
+const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT', expert_relaxed:'9 × 9 / 8 × 8相当'};
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
-let celebration=null;
+let celebration=null,expertMode='expert';
 try{
   autoCross=localStorage.getItem('star-auto-cross')==='true';
   const savedLevel=localStorage.getItem('star-level');if(label[savedLevel])level=savedLevel;
+  if(localStorage.getItem('star-expert-mode')==='expert_relaxed')expertMode='expert_relaxed';
 }catch{}
 function requestId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -117,7 +118,10 @@ function commit(prev){
 function applyGame(state, loadMemos=false, draw=true) {
   if(loadMemos)input.reset();
   game=state;puzzle=state.puzzle;level=puzzle.difficulty;
-  try{localStorage.setItem('star-level',level);}catch{}
+  try{
+    localStorage.setItem('star-level',level);
+    if(puzzle.size===9){expertMode=level;localStorage.setItem('star-expert-mode',level);}
+  }catch{}
   if(loadMemos) {
     cells=Array(puzzle.size**2).fill(0);undo=[];moveQueue=[];
     try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length)cells=stored.map(v=>v===2?2:0);} catch {}
@@ -132,7 +136,7 @@ function applyGame(state, loadMemos=false, draw=true) {
   cells=cells.map(v=>v===2?2:0);
   game.stars.forEach(([r,c])=>cells[r*puzzle.size+c]=1);
   if(ended()){moveQueue=[];saveQueue();}
-  document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',b.dataset.level===level));
+  document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',(b.dataset.level===level||(b.dataset.level==='expert'&&level==='expert_relaxed'))));
   if(draw)render();
 }
 function rewardMessage() {
@@ -145,7 +149,7 @@ function gameMessage() {
 }
 function controls() {
   const changing=busy||sending||moveQueue.length>0;
-  for(const selector of ['#advance','#next','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
+  for(const selector of ['#advance','#next','#overlay-next','#expert-mode', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
   disabled($('#undo'),busy||ended()||!undo.length);
   disabled($('#reset'),busy||ended());
   $('#retry-moves').hidden=!moveQueue.length||sending;
@@ -165,7 +169,7 @@ async function choose(next=false) {
     applyGame(state,true);gameMessage();
   }catch(e){
     if(previousLevel)level=previousLevel;
-    document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',b.dataset.level===level));
+    document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',(b.dataset.level===level||(b.dataset.level==='expert'&&level==='expert_relaxed'))));
     status(e.message);
   }finally{busy=false;controls();}
   if(moveQueue.length)pumpMoves();
@@ -203,6 +207,9 @@ function render() {
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
   text($('#result-message'),game.completed?rewardMessage():'次の問題で、もう一度。');
+  $('#expert-mode').hidden=n!==9;
+  text($('#expert-mode'),level==='expert_relaxed'?'難しい9×9に戻す':'8×8相当の難易度にする');
+  attribute($('#expert-mode'),'aria-pressed',String(level==='expert_relaxed'));
   text($('#auto-cross'),`自動で× ${autoCross?'ON':'OFF'}`);
   attribute($('#auto-cross'),'aria-pressed',String(autoCross));
   if(board.dataset.puzzle!==puzzle.id){
@@ -277,8 +284,12 @@ const input=attachBoardInput($('#board'),{
 $('#retry-moves').onclick=pumpMoves;
 window.addEventListener('online',pumpMoves);
 document.querySelectorAll('[data-level]').forEach(button=>button.onclick=async()=>{
-  if(busy||sending||moveQueue.length)return;level=button.dataset.level;await choose();
+  if(busy||sending||moveQueue.length)return;level=button.dataset.level==='expert'?expertMode:button.dataset.level;await choose();
 });
+$('#expert-mode').onclick=async()=>{
+  if(busy||sending||moveQueue.length)return;
+  level=level==='expert_relaxed'?'expert':'expert_relaxed';await choose();
+};
 $('#next').onclick=()=>choose(true);$('#advance').onclick=()=>choose(true);$('#overlay-next').onclick=()=>choose(true);
 function undoMemo(){
   if(busy||!undo.length||ended())return;

@@ -69,7 +69,7 @@ class Profile(BaseModel):
 
 
 class Start(BaseModel):
-    difficulty: Literal['easy', 'medium', 'hard', 'expert'] = 'easy'
+    difficulty: Literal['easy', 'medium', 'hard', 'expert', 'expert_relaxed'] = 'easy'
     request_id: uuid.UUID
 
 
@@ -138,7 +138,7 @@ def game_view(session, game):
 
 
 @app.get('/api/games/current')
-def current(difficulty: Literal['easy', 'medium', 'hard', 'expert'] = 'easy',
+def current(difficulty: Literal['easy', 'medium', 'hard', 'expert', 'expert_relaxed'] = 'easy',
             p: Player = Depends(player), session: Session = Depends(db)):
     game = session.scalar(select(Game).join(Puzzle, Puzzle.id == Game.puzzle_id)
                           .where(Game.player_id == p.id, Game.active.is_(True),
@@ -168,10 +168,10 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
         if existing.player_id != p.id:
             raise HTTPException(404, 'ゲームが見つかりません。')
         return game_view(session, existing)
-    if body.difficulty == 'expert':
-        stored = session.scalar(select(Puzzle).where(Puzzle.difficulty == 'expert').limit(1))
+    if body.difficulty in {'expert','expert_relaxed'}:
+        stored = session.scalar(select(Puzzle).where(Puzzle.difficulty == body.difficulty).limit(1))
         if stored:
-            seed_expert(dict(size=stored.size, regions=stored.regions, solution=stored.solution))
+            seed_expert(dict(size=stored.size, difficulty=stored.difficulty, regions=stored.regions, solution=stored.solution))
     for _ in range(5):
         try:
             generated = generate(body.difficulty)

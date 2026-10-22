@@ -31,3 +31,6 @@
 .fixed-reward-label{display:none;color:var(--gold);font-size:18px;margin:0}
 .fixed-reward .fixed-reward-label{display:block}
 .fixed-reward .score-equation{display:none}
+
+#expert-mode{display:block;width:100%;margin:-8px 0 18px;font-size:12px;border-color:var(--gold);color:var(--gold)}
+#expert-mode[hidden]{display:none}
