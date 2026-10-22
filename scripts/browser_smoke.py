@@ -23,7 +23,7 @@ else:
 
 def move(page, r, c, n):
     with page.expect_response(lambda response: '/stars' in response.url and response.request.method == 'POST') as pending:
-        page.locator('.cell').nth(r*n+c).click()
+        page.locator('.cell').nth(r*n+c).dblclick(delay=70)
     response = pending.value.json()
     if response['correct'] and not response['game']['game_over']:
         expect(page.locator('.cell').nth(r*n+c)).to_have_text('★')
@@ -34,7 +34,7 @@ def move(page, r, c, n):
 
 def advance(page):
     with page.expect_response(lambda response: response.url.endswith('/api/games') and response.request.method == 'POST') as pending:
-        page.locator('#advance').click()
+        (page.locator('#overlay-next') if page.locator('#game-over').is_visible() else page.locator('#advance')).click()
     game = pending.value.json()
     expect(page.locator('#puzzle-label')).to_contain_text(game['puzzle']['id'][:8].upper())
     expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
@@ -54,12 +54,10 @@ with sync_playwright() as p:
         page.locator('.cell').first.wait_for()
         assert page.locator('.cell').count()==36
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        page.locator('#memo-mode').click()
         page.locator('.cell').first.click()
         expect(page.locator('.cell').first).to_have_text('×')
         page.get_by_role('button',name='メモを1手戻す').click()
         expect(page.locator('.cell').first).to_have_text('')
-        page.locator('#star-mode').click()
         game=page.request.get(BASE_URL+'/api/games/current').json()
         n=game['puzzle']['size']
         cols=solutions(game['puzzle']['regions'])[0]

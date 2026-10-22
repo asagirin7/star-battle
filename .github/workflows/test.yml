@@ -27,6 +27,7 @@ jobs:
       - run: |
           python main.py > /tmp/star-battle.log 2>&1 &
           python scripts/browser_smoke.py
+          python scripts/interaction_smoke.py
           python scripts/concurrency_smoke.py
         env:
           DATABASE_URL: postgresql://postgres:test@localhost:5432/star_battle

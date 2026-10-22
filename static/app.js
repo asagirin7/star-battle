@@ -2,8 +2,9 @@
 const $ = s => document.querySelector(s);
 const colors = ['#b8c8df','#e7c4ae','#c5d4b4','#d2bfde','#e4d59f','#a9d2d2','#dbb6c4','#c0c1e4'];
 const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD'};
-let me = null, level = 'easy', puzzle = null, game = null, cells = [], undo = [], busy = false, mode = 'star';
-let pendingMove = null, pendingStart = null;
+let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
+let moveQueue=[],sending=false,pendingStart=null,autoCross=false;
+try{autoCross=localStorage.getItem('star-auto-cross')==='true';}catch{}
 function requestId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
   const bytes = crypto.getRandomValues(new Uint8Array(16)); bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
@@ -37,114 +38,173 @@ $('#profile-form').onsubmit = async event => {
   finally { submit.disabled = false; }
 };
 function savedKey() { return `star-battle:${me.id}:${game.id}`; }
+function queueKey() { return `star-queue:${me.id}:${game.id}`; }
 function save() { try { localStorage.setItem(savedKey(), JSON.stringify(cells.map(v=>v===2?2:0))); } catch {} }
+function saveQueue() { try {localStorage.setItem(queueKey(),JSON.stringify(moveQueue));} catch {} }
+function waiting(i) {return moveQueue.some(m=>m.row*puzzle.size+m.col===i);}
+function ended() {return !game || game.completed || game.game_over;}
+function mutable(i) {return !busy && !ended() && cells[i]!==1 && !waiting(i);}
+function restoreMemos(snapshot) {cells=cells.map((v,i)=>v===1?1:snapshot[i]===2?2:0);}
+function commit(prev) {
+  if(prev.some((v,i)=>v!==cells[i])){undo.push(prev);if(undo.length>500)undo.shift();}
+  save();render();
+}
 function applyGame(state, loadMemos=false) {
+  if(loadMemos)input.reset();
   game=state;puzzle=state.puzzle;level=puzzle.difficulty;
   if(loadMemos) {
-    cells=Array(puzzle.size**2).fill(0);undo=[];
-    try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length) cells=stored.map(v=>v===2?2:0);} catch {}
+    cells=Array(puzzle.size**2).fill(0);undo=[];moveQueue=[];
+    try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length)cells=stored.map(v=>v===2?2:0);} catch {}
+    try {
+      const stored=JSON.parse(localStorage.getItem(queueKey()));
+      if(Array.isArray(stored))moveQueue=stored.filter(m=>Number.isInteger(m.row)&&Number.isInteger(m.col)&&m.row>=0&&m.col>=0&&m.row<puzzle.size&&m.col<puzzle.size&&typeof m.request_id==='string');
+      // Resume an operation saved by the previous version as well.
+      const oldKey=`star-pending:${me.id}:${game.id}`,old=JSON.parse(localStorage.getItem(oldKey));
+      if(old&&!moveQueue.length)moveQueue=[old];localStorage.removeItem(oldKey);
+    } catch {}
   }
   cells=cells.map(v=>v===2?2:0);
   game.stars.forEach(([r,c])=>cells[r*puzzle.size+c]=1);
-  document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected', b.dataset.level===level));
+  if(ended()){moveQueue=[];saveQueue();}
+  document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',b.dataset.level===level));
   render();
 }
 function gameMessage() {
-  if(game.completed) status(`クリア！ ✦ 残機 ${game.score} = +${game.score} pt。次の問題に挑戦しよう。`, true);
-  else if(game.game_over) status('ゲームオーバー。新しい問題で、もう一度挑戦しよう。');
-  else status('★ 星 / × メモ を選んで、マスをタップ。正解の星は固定されます。');
+  if(game.completed)status(`クリア！ ✦ 残機 ${game.score} = +${game.score} pt。次の問題に挑戦しよう。`,true);
+  else if(game.game_over)status('ゲームオーバー。NEXTゲームで、もう一度挑戦しよう。');
+  else status('1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
-async function choose(next = false) {
-  if (!me) { openProfile(); return; }
-  if (busy) return;
-  busy = true; $('#advance').disabled=true;
+function controls() {
+  const changing=busy||sending||moveQueue.length>0;
+  for(const selector of ['#advance','#next','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]']) $(selector).disabled=changing;
+  $('#undo').disabled=busy||ended()||!undo.length;
+  $('#reset').disabled=busy||ended();
+  $('#retry-moves').hidden=!moveQueue.length||sending;
+}
+async function choose(next=false) {
+  if(!me){openProfile();return;}
+  if(busy||sending||moveQueue.length)return;
+  busy=true;controls();
   const previousLevel=game?.puzzle.difficulty;
   try {
     status('新しい星の配置を準備しています…');
-    let state = next ? null : await api(`games/current?difficulty=${level}`);
-    if(!state) {
-      if(!pendingStart || pendingStart.difficulty!==level)pendingStart={difficulty:level,request_id:requestId()};
+    let state=next?null:await api(`games/current?difficulty=${level}`);
+    if(!state){
+      if(!pendingStart||pendingStart.difficulty!==level)pendingStart={difficulty:level,request_id:requestId()};
       state=await api('games',pendingStart);pendingStart=null;
     }
     applyGame(state,true);gameMessage();
-  } catch(e) {
+  }catch(e){
     if(previousLevel)level=previousLevel;
     document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',b.dataset.level===level));
     status(e.message);
-  } finally { busy = false; $('#advance').disabled=false; }
+  }finally{busy=false;controls();}
+  if(moveQueue.length)pumpMoves();
 }
-function renderCell(button, i) {
-  const r=Math.floor(i/puzzle.size),c=i%puzzle.size,value=cells[i];
-  button.className='cell'+(value===1?' locked':value===2?' marked':'');
-  button.textContent=value===1?'★':value===2?'×':'';
-  button.setAttribute('aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':value===2?'除外':'空白'}`);
+function renderCell(button,i) {
+  const r=Math.floor(i/puzzle.size),c=i%puzzle.size,value=cells[i],pending=value!==1&&waiting(i);
+  button.classList.toggle('locked',value===1);
+  button.classList.toggle('pending',pending);
+  button.classList.toggle('marked',value===2&&!pending);
+  const glyph=value===1||pending?'★':value===2?'×':'';
+  const mark=button.firstElementChild;
+  if(mark.textContent!==glyph)mark.textContent=glyph;
+  mark.className=value===2&&!pending?'mark':'';
+  button.setAttribute('aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':'空白'}`);
 }
 function render() {
-  const n = puzzle.size;
-  $('#puzzle-label').textContent = `${label[level]} / ${puzzle.id.slice(0,8).toUpperCase()}`;
-  $('#puzzle-title').textContent = game.completed ? 'クリア！ 次の星を探そう ✦' : game.game_over?'もう一度、ひらめこう。':'星の居場所を見つけよう。';
+  if(!puzzle)return;
+  const n=puzzle.size,board=$('#board');
+  $('#puzzle-label').textContent=`${label[level]} / ${puzzle.id.slice(0,8).toUpperCase()}`;
+  $('#puzzle-title').textContent=game.completed?'クリア！ 次の星を探そう ✦':game.game_over?'もう一度、ひらめこう。':'星の居場所を見つけよう。';
   $('#lives').replaceChildren();
-  for(let i=0;i<3;i++) $('#lives').append(Object.assign(document.createElement('span'),{textContent:'♥',className:i<game.lives?'':'lost'}));
+  for(let i=0;i<3;i++)$('#lives').append(Object.assign(document.createElement('span'),{textContent:'♥',className:i<game.lives?'':'lost'}));
   $('#lives').setAttribute('aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
   $('#advance').textContent=game.completed?'次の問題に挑戦 →':game.game_over?'新しい問題で再挑戦 →':'新しい問題に挑戦 →';
-  const board = $('#board'); board.replaceChildren(); board.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
-  cells.forEach((value, i) => {
-    const r = Math.floor(i/n), c = i%n, region = puzzle.regions[r][c];
-    const button = document.createElement('button');button.dataset.index=i;renderCell(button,i);
-    button.style.background = colors[region];
-    if (r<n-1 && puzzle.regions[r+1][c]!==region) button.style.borderBottom = '2px solid #444357';
-    if (c<n-1 && puzzle.regions[r][c+1]!==region) button.style.borderRight = '2px solid #444357';
-    button.onkeydown = event => {
-      const delta = {ArrowUp:-n,ArrowDown:n,ArrowLeft:-1,ArrowRight:1}[event.key];
-      if (delta !== undefined) {event.preventDefault();board.children[Math.max(0,Math.min(n*n-1,i+delta))].focus();}
-    };
-    board.append(button);
+  $('#game-over').hidden=!game.game_over;
+  $('#auto-cross').textContent=`自動で× ${autoCross?'ON':'OFF'}`;
+  $('#auto-cross').setAttribute('aria-pressed',String(autoCross));
+  if(board.dataset.puzzle!==puzzle.id){
+    board.replaceChildren();board.dataset.puzzle=puzzle.id;
+    board.style.gridTemplateColumns=`repeat(${n},minmax(0,1fr))`;
+    board.style.gridTemplateRows=`repeat(${n},minmax(0,1fr))`;
+    for(let i=0;i<n*n;i++){
+      const r=Math.floor(i/n),c=i%n,region=puzzle.regions[r][c];
+      const button=document.createElement('button');button.type='button';button.className='cell';button.dataset.index=i;
+      button.style.background=colors[region];button.append(document.createElement('span'));
+      if(r<n-1&&puzzle.regions[r+1][c]!==region)button.style.borderBottom='2px solid #444357';
+      if(c<n-1&&puzzle.regions[r][c+1]!==region)button.style.borderRight='2px solid #444357';
+      board.append(button);
+    }
+  }
+  cells.forEach((_,i)=>renderCell(board.children[i],i));
+  controls();updateTimer();
+}
+function autoMark() {
+  if(!autoCross)return;
+  const n=puzzle.size;
+  game.stars.forEach(([r,c])=>{
+    for(let i=0;i<n*n;i++){
+      if(cells[i]!==0||waiting(i))continue;
+      const rr=Math.floor(i/n),cc=i%n;
+      if(rr===r||cc===c||puzzle.regions[rr][cc]===puzzle.regions[r][c]||(Math.abs(rr-r)<=1&&Math.abs(cc-c)<=1))cells[i]=2;
+    }
   });
-  updateTimer();
 }
-function memo(i) {
-  if(busy || !game || game.completed || game.game_over || cells[i]===1)return;
-  undo.push(cells.slice());cells[i]=cells[i]===2?0:2;save();renderCell($('#board').children[i],i);
+function star(i) {
+  if(!mutable(i))return;
+  moveQueue.push({row:Math.floor(i/puzzle.size),col:i%puzzle.size,request_id:requestId()});
+  saveQueue();render();pumpMoves();
 }
-async function star(i) {
-  if(busy || !game || game.completed || game.game_over || cells[i]===1)return;
-  busy=true;
+async function pumpMoves() {
+  if(sending||busy||!moveQueue.length)return;
+  sending=true;controls();
   try {
-    const row=Math.floor(i/puzzle.size),col=i%puzzle.size;
-    // Preserve the operation ID after a network error, including after reload.
-    const key=`star-pending:${me.id}:${game.id}`;
-    if(!pendingMove) {try {pendingMove=JSON.parse(localStorage.getItem(key));} catch {}}
-    const retry=!!pendingMove;
-    if(!pendingMove)pendingMove={row,col,request_id:requestId()};
-    try {localStorage.setItem(key,JSON.stringify(pendingMove));} catch {}
-    const move=pendingMove;
-    const result=await api(`games/${game.id}/stars`,move);
-    pendingMove=null;try {localStorage.removeItem(key);} catch {}
-    me=result.player;profileView();applyGame(result.game);
-    const index=move.row*puzzle.size+move.col;
-    if(!result.correct) {cells[index]=2;save();renderCell($('#board').children[index],index);$('#board').children[index].classList.add('wrong');}
-    if(game.completed || game.game_over)gameMessage();
-    else if(!result.correct)status(`そこには星を置けません。残機 ${game.lives}。`);
-    else status(retry?'前の操作を確認しました。続けて星を置けます。':'正解！ ✦ 次の星を見つけよう。');
-    $('#board').children[index].focus({preventScroll:true});
-  } catch(e) {status(`${e.message} 次に星をタップすると、前の操作を再確認します。`);}
-  finally {busy=false;}
+    while(moveQueue.length&&!ended()){
+      const move=moveQueue[0],result=await api(`games/${game.id}/stars`,move);
+      moveQueue.shift();saveQueue();
+      me=result.player;profileView();applyGame(result.game);
+      const index=move.row*puzzle.size+move.col,prev=cells.slice();
+      if(result.correct)autoMark();else cells[index]=2;
+      commit(prev);
+      if(!result.correct){
+        const cell=$('#board').children[index];cell.classList.remove('wrong');void cell.offsetWidth;cell.classList.add('wrong');cell.addEventListener('animationend',()=>cell.classList.remove('wrong'),{once:true});
+      }
+      if(ended())gameMessage();
+      else status(result.correct?'正解！ ✦ 次の星を見つけよう。':`そこには星を置けません。残機 ${game.lives}。`);
+    }
+  }catch(e){status(`${e.message} 「通信を再試行」で同じ操作から再開できます。`);}
+  finally{sending=false;render();}
 }
-$('#board').onclick=event=>{const b=event.target.closest('[data-index]');if(!b)return;const i=Number(b.dataset.index);if(mode==='star')star(i);else if(event.detail<2)memo(i);};
-$('#board').ondblclick=event=>{if(mode==='memo'){const b=event.target.closest('[data-index]');if(b)star(Number(b.dataset.index));}};
-$('#board').oncontextmenu=event=>{const b=event.target.closest('[data-index]');if(b){event.preventDefault();star(Number(b.dataset.index));}};
-function setMode(value) {mode=value;['star','memo'].forEach(v=>{const b=$(`#${v}-mode`);b.classList.toggle('selected',mode===v);b.setAttribute('aria-pressed',String(mode===v));});}
-$('#star-mode').onclick=()=>setMode('star');$('#memo-mode').onclick=()=>setMode('memo');
-document.querySelectorAll('[data-level]').forEach(button => button.onclick = async () => {
-  if (busy) return;level=button.dataset.level;pendingMove=null;await choose();
+const input=attachBoardInput($('#board'),{
+  blocked:()=>busy||ended(),size:()=>puzzle.size,value:i=>cells[i],mutable,
+  snapshot:()=>cells.slice(),paint:(i,value)=>{if(mutable(i))cells[i]=value;},
+  render:()=>render(),commit,
+  restoreFirstTap:base=>{restoreMemos(base);if(undo[undo.length-1]===base)undo.pop();save();render();},star
 });
-$('#next').onclick = () => {pendingMove=null;choose(true);};
-$('#advance').onclick = () => {pendingMove=null;choose(true);};
-$('#undo').onclick = () => {
-  if(busy || !undo.length || !game || game.completed || game.game_over)return;
-  const memoState=undo.pop();cells=cells.map((v,i)=>v===1?1:memoState[i]===2?2:0);save();render();
+$('#retry-moves').onclick=pumpMoves;
+window.addEventListener('online',pumpMoves);
+document.querySelectorAll('[data-level]').forEach(button=>button.onclick=async()=>{
+  if(busy||sending||moveQueue.length)return;level=button.dataset.level;await choose();
+});
+$('#next').onclick=()=>choose(true);$('#advance').onclick=()=>choose(true);$('#overlay-next').onclick=()=>choose(true);
+function undoMemo(){
+  if(busy||!undo.length||ended())return;
+  input.reset();restoreMemos(undo.pop());save();render();
+}
+$('#undo').onclick=undoMemo;
+document.addEventListener('keydown',event=>{
+  if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.target.closest('input,textarea,[contenteditable]')){event.preventDefault();undoMemo();}
+});
+$('#reset').onclick=()=>{
+  if(busy||ended())return;
+  input.reset();const prev=cells.slice();cells=cells.map(v=>v===1?1:0);commit(prev);status('メモを消しました。残機と確定した星はそのままです。');
 };
-$('#reset').onclick = () => {if(!busy && game && !game.completed && !game.game_over){undo.push(cells.slice());cells=cells.map(v=>v===1?1:0);save();render();status('メモを消しました。残機と確定した星はそのままです。');}};
+$('#auto-cross').onclick=()=>{
+  autoCross=!autoCross;try{localStorage.setItem('star-auto-cross',String(autoCross));}catch{}
+  if(game&&!ended()){input.reset();const prev=cells.slice();autoMark();commit(prev);}else if(game)render();
+  else{$('#auto-cross').textContent=`自動で× ${autoCross?'ON':'OFF'}`;$('#auto-cross').setAttribute('aria-pressed',String(autoCross));}
+};
 function row(container, position, title, detail, points, mine=false) {
   const el=document.createElement('div');el.className='list-row'+(mine?' mine':'');
   const pos=Object.assign(document.createElement('span'),{className:'position',textContent:position});
