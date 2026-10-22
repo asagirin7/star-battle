@@ -37,7 +37,7 @@ class Clear(Base):
     points: Mapped[int]
     mistakes: Mapped[int] = mapped_column(default=0, server_default='0')
     seconds: Mapped[int]
-    cleared_at: Mapped[float] = mapped_column(Float, default=time.time)
+    cleared_at: Mapped[float] = mapped_column(Float, default=time.time, index=True)
 
 
 class Puzzle(Base):

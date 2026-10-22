@@ -34,3 +34,5 @@
 
 #expert-mode{display:block;width:100%;margin:-8px 0 18px;font-size:12px;border-color:var(--gold);color:var(--gold)}
 #expert-mode[hidden]{display:none}
+
+.ranking-period{display:flex;gap:8px;margin:24px 0 12px}.ranking-period button{flex:1;max-width:160px}.ranking-period .selected{color:var(--gold);border-color:var(--gold);background:#f6d58b12}#ranking-description{font-size:12px;line-height:1.8}

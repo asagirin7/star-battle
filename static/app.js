@@ -316,22 +316,45 @@ function row(container, position, title, detail, points, mine=false) {
   el.append(pos,name,Object.assign(document.createElement('strong'),{textContent:`${points} pt`}));container.append(el);
 }
 function empty(container,text) {container.append(Object.assign(document.createElement('p'),{className:'empty',textContent:text}));}
+let rankingPeriod='daily',rankingRequest=0,rankingDay=null;
+function japanDay(){return Math.floor((Date.now()+9*3600000)/86400000);}
+async function loadRanking(){
+  const request=++rankingRequest,period=rankingPeriod,container=$('#ranking-list');
+  rankingDay=japanDay();
+  document.querySelectorAll('[data-ranking]').forEach(button=>{
+    button.classList.toggle('selected',button.dataset.ranking===period);
+    attribute(button,'aria-pressed',String(button.dataset.ranking===period));
+  });
+  text($('#ranking-description'),period==='daily'?'今日の獲得ポイント順・日本時間0時更新・上位100人':'累計ポイント順・上位100人');
+  container.replaceChildren();empty(container,'読み込み中…');attribute(container,'aria-busy','true');
+  try{
+    const rows=await api(`ranking?period=${period}`);
+    if(request!==rankingRequest)return;
+    container.replaceChildren();
+    rows.forEach((p,i)=>row(container,String(i+1).padStart(2,'0'),p.name,`${p.clears} 問クリア${p.id===me?.id?' · あなた':''}`,p.points,p.id===me?.id));
+    if(!rows.length)empty(container,period==='daily'?'今日のクリアはまだありません。最初の星を集めよう。':'まだ記録がありません。最初の星を集めよう。');
+  }catch(e){if(request===rankingRequest){container.replaceChildren();empty(container,e.message);}}
+  finally{if(request===rankingRequest)attribute(container,'aria-busy','false');}
+}
+document.querySelectorAll('[data-ranking]').forEach(button=>button.onclick=()=>{
+  rankingPeriod=button.dataset.ranking;loadRanking();
+});
+function refreshDaily(){
+  if(!document.hidden&&!$('#ranking').hidden&&rankingPeriod==='daily'&&rankingDay!==japanDay())loadRanking();
+}
+setInterval(refreshDaily,1000);
+document.addEventListener('visibilitychange',refreshDaily);
 async function showTab(tab) {
   document.querySelectorAll('.tab').forEach(s=>s.hidden=s.id!==tab);
   document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
   if(tab==='play')return;
+  if(tab==='ranking'){await loadRanking();return;}
   const container=$(`#${tab}-list`);container.replaceChildren();empty(container,'読み込み中…');
   try {
-    if(tab==='ranking') {
-      const rows=await api('ranking');container.replaceChildren();
-      rows.forEach((p,i)=>row(container,String(i+1).padStart(2,'0'),p.name,`${p.clears} 問クリア${p.id===me?.id?' · あなた':''}`,p.points,p.id===me?.id));
-      if(!rows.length)empty(container,'まだ記録がありません。最初の星を集めよう。');
-    } else {
-      if(!me){container.replaceChildren();empty(container,'名前を登録すると、クリア記録がここに表示されます。');return;}
-      const rows=await api('history');container.replaceChildren();
-      rows.forEach(p=>row(container,'✦',`${label[p.difficulty]} / ${p.puzzle_id.slice(0,8).toUpperCase()}`,`${new Date(p.cleared_at*1000).toLocaleDateString('ja-JP')} · ${Math.floor(p.seconds/60)}分${p.seconds%60}秒 · ミス${p.mistakes}回`,p.points));
-      if(!rows.length)empty(container,'まだクリア記録がありません。最初の一問に挑戦しよう。');
-    }
+    if(!me){container.replaceChildren();empty(container,'名前を登録すると、クリア記録がここに表示されます。');return;}
+    const rows=await api('history');container.replaceChildren();
+    rows.forEach(p=>row(container,'✦',`${label[p.difficulty]} / ${p.puzzle_id.slice(0,8).toUpperCase()}`,`${new Date(p.cleared_at*1000).toLocaleDateString('ja-JP')} · ${Math.floor(p.seconds/60)}分${p.seconds%60}秒 · ミス${p.mistakes}回`,p.points));
+    if(!rows.length)empty(container,'まだクリア記録がありません。最初の一問に挑戦しよう。');
   } catch(e) {container.replaceChildren();empty(container,e.message);}
 }
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));

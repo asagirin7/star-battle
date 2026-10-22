@@ -248,10 +248,14 @@ def history(p: Player = Depends(player), session: Session = Depends(db)):
 
 
 @app.get('/api/ranking')
-def ranking(session: Session = Depends(db)):
+def ranking(period: Literal['all', 'daily'] = 'all', session: Session = Depends(db)):
     total = func.sum(Clear.points)
-    rows = session.execute(select(Player.id, Player.name, total.label('points'), func.count(Clear.id).label('clears'))
-                           .join(Clear).group_by(Player.id, Player.name)
+    query = select(Player.id, Player.name, total.label('points'), func.count(Clear.id).label('clears')).join(Clear)
+    if period == 'daily':
+        # Japan standard time has a fixed UTC+9 offset. Filter by completion time.
+        start = ((int(time.time())+9*3600)//86400)*86400-9*3600
+        query = query.where(Clear.cleared_at >= start, Clear.cleared_at < start+86400)
+    rows = session.execute(query.group_by(Player.id, Player.name)
                            .order_by(total.desc(), func.count(Clear.id).desc(), Player.id).limit(100))
     return [dict(row._mapping) for row in rows]
 

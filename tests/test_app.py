@@ -246,3 +246,37 @@ def test_expert_variants_keep_unique_connected_nontrivial_areas(level):
         assert all(valid_area(puzzle['regions'],area,level=='expert_relaxed') for area in range(9))
         if level=='expert_relaxed':
             assert sum(sum(row.count(i) for row in puzzle['regions'])==2 for i in range(9))>=2
+
+
+def test_daily_ranking_uses_japan_midnight_and_completion_time(client,monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from models import Player, Clear
+    start_of_day=datetime(2026,10,22,15,tzinfo=timezone.utc).timestamp()
+    now=[start_of_day+3600]
+    monkeypatch.setattr(main,'time',SimpleNamespace(time=lambda:now[0]))
+    with Session(main.engine) as session:
+        for ident in ['a','b','c','d','yesterday']:
+            session.add(Player(id=ident,name=ident,token_hash=ident))
+        session.flush()
+        records=[('yesterday',1000,start_of_day-.001),('a',10,start_of_day),
+                 ('a',10,start_of_day+1),('b',50,start_of_day+2),
+                 ('c',20,start_of_day+3),('d',20,start_of_day+86400-.001),
+                 ('d',75,start_of_day+86400)]
+        for i,(player_id,points,finished) in enumerate(records):
+            session.add(Game(id=f'g{i}',player_id=player_id,puzzle_id=f'p{i}',started_at=start_of_day-90000))
+            session.flush()
+            session.add(Clear(id=f'c{i}',player_id=player_id,puzzle_id=f'p{i}',game_id=f'g{i}',
+                              points=points,mistakes=0,seconds=10,cleared_at=finished))
+        session.commit()
+    daily=client.get('/api/ranking?period=daily').json()
+    assert [(p['id'],p['points'],p['clears']) for p in daily]==[
+        ('b',50,1),('a',20,2),('c',20,1),('d',20,1)]
+    cumulative=client.get('/api/ranking?period=all').json()
+    assert cumulative==client.get('/api/ranking').json()
+    assert cumulative[0]['id']=='yesterday' and cumulative[0]['points']==1000
+    now[0]=start_of_day+86400
+    assert [(p['id'],p['points']) for p in client.get('/api/ranking?period=daily').json()]==[('d',75)]
+    now[0]=start_of_day+2*86400
+    assert client.get('/api/ranking?period=daily').json()==[]
+    assert client.get('/api/ranking?period=weekly').status_code==422

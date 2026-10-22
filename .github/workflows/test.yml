@@ -27,6 +27,7 @@ jobs:
       - run: |
           python main.py > /tmp/star-battle.log 2>&1 &
           python scripts/browser_smoke.py
+          python scripts/daily_ranking_smoke.py
           python scripts/interaction_smoke.py
           python scripts/preview_smoke.py
           python scripts/render_smoke.py
