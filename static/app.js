@@ -1,7 +1,7 @@
 'use strict';
 const $ = s => document.querySelector(s);
-const colors = ['#b8c8df','#e7c4ae','#c5d4b4','#d2bfde','#e4d59f','#a9d2d2','#dbb6c4','#c0c1e4'];
-const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD'};
+const colors = ['#b8c8df','#e7c4ae','#c5d4b4','#d2bfde','#e4d59f','#a9d2d2','#dbb6c4','#c0c1e4','#9cc8a0'];
+const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT'};
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
 let celebration=null;
@@ -36,7 +36,8 @@ function celebrate(completed,previousPoints) {
   const start=performance.now(),duration=reduced?150:3000;
   celebration={displayed:previousPoints,frame:0};
   text($('#reward-lives'),'♥'.repeat(completed.lives));
-  text($('#reward-multiplier'),String(completed.puzzle.multiplier));
+  text($('#reward-multiplier'),String(completed.puzzle.multiplier||''));
+  dialog.classList.toggle('fixed-reward',completed.puzzle.scoring==='fixed');
   text($('#reward-earned'),`+${completed.score} pt`);
   text($('#reward-total'),String(previousPoints));
   dialog.dataset.phase='lives';
@@ -130,14 +131,17 @@ function applyGame(state, loadMemos=false, draw=true) {
   document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',b.dataset.level===level));
   if(draw)render();
 }
+function rewardMessage() {
+  return puzzle.scoring==='fixed'?`ノーミスクリア！ +${game.score} pt`:`残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt`;
+}
 function gameMessage() {
-  if(game.completed)status(`クリア！ ✦ 残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt。次の問題に挑戦しよう。`,true);
+  if(game.completed)status(`クリア！ ✦ ${rewardMessage()}。次の問題に挑戦しよう。`,true);
   else if(game.game_over)status('ゲームオーバー。NEXTゲームで、もう一度挑戦しよう。');
-  else status('1回タップで×、2回タップで★。ドラッグで×を付け外し。');
+  else status((puzzle.scoring==='fixed'?'9×9は1ミスで終了、クリアで30 pt。':'')+'1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
 function controls() {
   const changing=busy||sending||moveQueue.length>0;
-  for(const selector of ['#advance','#next','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]']) disabled($(selector),changing);
+  for(const selector of ['#advance','#next','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
   disabled($('#undo'),busy||ended()||!undo.length);
   disabled($('#reset'),busy||ended());
   $('#retry-moves').hidden=!moveQueue.length||sending;
@@ -185,7 +189,8 @@ function render() {
   text($('#puzzle-label'),`${label[level]} / ${puzzle.id.slice(0,8).toUpperCase()}`);
   text($('#puzzle-title'),game.completed?'クリア！ 次の星を探そう ✦':game.game_over?'もう一度、ひらめこう。':'星の居場所を見つけよう。');
   const hearts=$('#lives');
-  if(hearts.children.length!==3)hearts.replaceChildren(...Array.from({length:3},()=>Object.assign(document.createElement('span'),{textContent:'♥'})));
+  const maxLives=puzzle.initial_lives||3;
+  if(hearts.children.length!==maxLives)hearts.replaceChildren(...Array.from({length:maxLives},()=>Object.assign(document.createElement('span'),{textContent:'♥'})));
   [...hearts.children].forEach((heart,i)=>heart.classList.toggle('lost',i>=game.lives));
   attribute(hearts,'aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
   text($('#advance'),game.completed?'次の問題に挑戦 →':game.game_over?'新しい問題で再挑戦 →':'新しい問題に挑戦 →');
@@ -193,7 +198,7 @@ function render() {
   result.hidden=!(game.completed||game.game_over);
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
-  text($('#result-message'),game.completed?`残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt`:'次の問題で、もう一度。');
+  text($('#result-message'),game.completed?rewardMessage():'次の問題で、もう一度。');
   text($('#auto-cross'),`自動で× ${autoCross?'ON':'OFF'}`);
   attribute($('#auto-cross'),'aria-pressed',String(autoCross));
   if(board.dataset.puzzle!==puzzle.id){

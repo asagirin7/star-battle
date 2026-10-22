@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from config import database_url
 from models import Clear, Game, Move, Player, Puzzle
-from puzzle_engine import INITIAL_LIVES, generate, multiplier
+from puzzle_engine import generate, multiplier, life_limit, clear_points
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ('style.css', 'board-input.js', 'app.js')
@@ -69,13 +69,13 @@ class Profile(BaseModel):
 
 
 class Start(BaseModel):
-    difficulty: Literal['easy', 'medium', 'hard'] = 'easy'
+    difficulty: Literal['easy', 'medium', 'hard', 'expert'] = 'easy'
     request_id: uuid.UUID
 
 
 class StarAttempt(BaseModel):
-    row: int = Field(ge=0, le=7, strict=True)
-    col: int = Field(ge=0, le=7, strict=True)
+    row: int = Field(ge=0, le=8, strict=True)
+    col: int = Field(ge=0, le=8, strict=True)
     request_id: uuid.UUID
 
 
@@ -120,7 +120,8 @@ def me(p: Player = Depends(player), session: Session = Depends(db)):
 
 def puzzle_view(puzzle):
     return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
-                points=INITIAL_LIVES*multiplier(puzzle.size), multiplier=multiplier(puzzle.size), regions=puzzle.regions)
+                points=clear_points(puzzle.size, 0), multiplier=multiplier(puzzle.size),
+                initial_lives=life_limit(puzzle.size), scoring='fixed' if puzzle.size == 9 else 'lives', regions=puzzle.regions)
 
 
 def game_view(session, game):
@@ -130,14 +131,14 @@ def game_view(session, game):
     clear = session.scalar(select(Clear).where(Clear.game_id == game.id))
     return dict(id=game.id, started_at=game.started_at, puzzle=puzzle_view(puzzle),
                 stars=sorted(stars), mistakes=game.mistakes,
-                lives=max(0, INITIAL_LIVES-game.mistakes),
+                lives=max(0, life_limit(puzzle.size)-game.mistakes),
                 completed=clear is not None, score=clear.points if clear else 0,
                 seconds=(clear.seconds if clear else max(0, int((game.finished_at or time.time())-game.started_at))),
-                game_over=game.mistakes >= INITIAL_LIVES)
+                game_over=game.mistakes >= life_limit(puzzle.size))
 
 
 @app.get('/api/games/current')
-def current(difficulty: Literal['easy', 'medium', 'hard'] = 'easy',
+def current(difficulty: Literal['easy', 'medium', 'hard', 'expert'] = 'easy',
             p: Player = Depends(player), session: Session = Depends(db)):
     game = session.scalar(select(Game).join(Puzzle, Puzzle.id == Game.puzzle_id)
                           .where(Game.player_id == p.id, Game.active.is_(True),
@@ -218,7 +219,7 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
                          row=body.row, col=body.col, correct=correct))
         if not correct:
             game.mistakes += 1
-            if game.mistakes >= INITIAL_LIVES:
+            if game.mistakes >= life_limit(puzzle.size):
                 game.finished_at = time.time()
         session.flush()
         stars = set(map(tuple, state['stars']))
@@ -227,7 +228,7 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
         if len(stars) == puzzle.size:
             game.finished_at = time.time()
             session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
-                              points=(INITIAL_LIVES-game.mistakes)*multiplier(puzzle.size), mistakes=game.mistakes,
+                              points=clear_points(puzzle.size, game.mistakes), mistakes=game.mistakes,
                               seconds=max(0, int(time.time()-game.started_at))))
     session.commit()
     return dict(correct=previous.correct if previous else correct,

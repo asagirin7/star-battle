@@ -117,10 +117,37 @@ with sync_playwright() as p:
         page.locator('.cell').first.wait_for()
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 3回')
         terminal(page,'ゲームオーバー')
-        for difficulty,n in [('medium',7),('hard',8)]:
+        for difficulty,n in [('medium',7),('hard',8),('expert',9)]:
             page.locator(f'[data-level="{difficulty}"]').click()
             expect(page.locator('.cell')).to_have_count(n*n)
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        secret=page.locator('[data-level="expert"]')
+        hard=page.locator('[data-level="hard"]').bounding_box()
+        hit=secret.bounding_box()
+        assert hit['x'] >= hard['x']+hard['width']
+        assert secret.inner_text() == ''
+        assert secret.evaluate("(b)=>getComputedStyle(b).backgroundColor") == 'rgba(0, 0, 0, 0)'
+        assert secret.evaluate("(b)=>getComputedStyle(b).borderTopColor") == 'rgba(0, 0, 0, 0)'
+        expert=page.request.get(BASE_URL+'/api/games/current?difficulty=expert').json()
+        assert expert['puzzle']['multiplier'] is None
+        assert expert['lives']==1
+        assert expert['puzzle']['points']==30
+        for r,c in enumerate(solutions(expert['puzzle']['regions'])[0]):move(page,r,c,9)
+        expect(page.locator('.fixed-reward-label')).to_be_visible()
+        expect(page.locator('#reward-earned')).to_have_text('+30 pt')
+        terminal(page,'クリア！ ✦')
+        expect(page.locator('#total')).to_contain_text('35')
+        with page.expect_response(lambda response: response.url.endswith('/api/games') and response.request.method == 'POST') as fresh_pending:
+            page.locator('#overlay-next').click()
+        fresh=fresh_pending.value.json()
+        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 1、ミス 0回')
+        wrong=(solutions(fresh['puzzle']['regions'])[0][0]+1)%9
+        move(page,0,wrong,9)
+        terminal(page,'ゲームオーバー')
+        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 1回')
+        page.reload()
+        terminal(page,'ゲームオーバー')
+        assert not page.locator('.cell').evaluate_all("(cells)=>cells.some(b=>!b.style.background)")
         page.locator('[data-level="easy"]').click()
         expect(page.locator('.cell')).to_have_count(36)
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 3回')

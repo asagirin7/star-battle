@@ -56,7 +56,7 @@ def wrong_col(game):
 
 
 def test_generated_unique_connected_and_varied():
-    for level in ['easy','medium','hard']:
+    for level in ['easy','medium','hard','expert']:
         fingerprints = set()
         for seed in range(6):
             p = generate(level, random.Random(seed))
@@ -67,6 +67,10 @@ def test_generated_unique_connected_and_varied():
             n=p['size']
             for region in range(n):
                 cells={(r,c) for r in range(n) for c in range(n) if p['regions'][r][c]==region}
+                if level == 'expert':
+                    assert len(cells) >= 3
+                    assert len({r for r,c in cells}) >= 2
+                    assert len({c for r,c in cells}) >= 2
                 visited={next(iter(cells))}
                 while True:
                     expanded=visited | {(r+dr,c+dc) for r,c in visited for dr,dc in [(0,1),(0,-1),(1,0),(-1,0)] if (r+dr,c+dc) in cells}
@@ -197,3 +201,28 @@ def test_asset_urls_change_with_content_and_revalidate(client):
     import hashlib
     expected=hashlib.sha256(b''.join((main.ROOT/'static'/name).read_bytes() for name in main.ASSETS)).hexdigest()[:16]
     assert main.ASSET_VERSION==expected
+
+
+def test_expert_one_mistake_fails_and_clear_is_fixed_30(client):
+    register(client)
+    game=start(client,'expert')
+    assert game['lives']==game['puzzle']['initial_lives']==1
+    assert game['puzzle']['points']==30
+    assert game['puzzle']['scoring']=='fixed'
+    assert game['puzzle']['multiplier'] is None
+    request_id=nonce()
+    failed=star(client,game,0,wrong_col(game),request_id)
+    assert failed['game']['game_over'] and failed['game']['lives']==0
+    repeat=star(client,game,0,wrong_col(game),request_id)
+    assert repeat['game']['mistakes']==1
+    assert client.get('/api/games/current?difficulty=expert').json()['game_over']
+    result=solved(client,game)
+    assert result['game']['game_over'] and not result['game']['completed']
+    assert result['player']['points']==0
+    fresh=start(client,'expert')
+    assert fresh['lives']==1
+    result=solved(client,fresh)
+    assert result['game']['completed'] and result['game']['score']==30
+    assert result['player']['points']==30
+    assert client.get('/api/history').json()[0]['points']==30
+    assert client.get('/api/ranking').json()[0]['points']==30

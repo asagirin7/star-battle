@@ -23,3 +23,11 @@
 #clear-celebration[data-phase=lives] .multiply,#clear-celebration[data-phase=lives] .multiplier-factor,#clear-celebration[data-phase=lives] .reward-earned,#clear-celebration[data-phase=multiply] .reward-earned{opacity:0;transform:scale(.7)}
 #clear-celebration[data-phase=total] .reward-earned{transform:translateY(35px) scale(.6);opacity:0}
 @media(prefers-reduced-motion:no-preference){.score-equation>span,.reward-earned{transition:opacity .35s,transform .5s}.celebration-content h2{animation:clear-arrive .5s ease-out}.reward-total{transition:box-shadow .4s}#clear-celebration[data-phase=total] .reward-total{box-shadow:0 0 40px #f6d58b44}@keyframes clear-arrive{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:scale(1)}}}
+
+.difficulty .secret-level,.difficulty .secret-level:hover,.difficulty .secret-level:active,.difficulty .secret-level.selected{flex:0 0 44px;min-width:44px;padding:0;border-color:transparent;background:transparent;color:transparent;box-shadow:none}
+.difficulty .secret-level:focus:not(:focus-visible){outline:none}
+@media(max-width:360px){.difficulty{gap:4px}.difficulty button{padding-left:4px;padding-right:4px}}
+
+.fixed-reward-label{display:none;color:var(--gold);font-size:18px;margin:0}
+.fixed-reward .fixed-reward-label{display:block}
+.fixed-reward .score-equation{display:none}
