@@ -141,7 +141,7 @@ function rewardMessage() {
 function gameMessage() {
   if(game.completed)status(`クリア！ ✦ ${rewardMessage()}。次の問題に挑戦しよう。`,true);
   else if(game.game_over)status('ゲームオーバー。NEXTゲームで、もう一度挑戦しよう。');
-  else status((puzzle.scoring==='fixed'?'9×9は1ミスで終了、クリアで30 pt。':'')+'1回タップで×、2回タップで★。ドラッグで×を付け外し。');
+  else status((puzzle.scoring==='fixed'?`9×9は1ミスで終了、クリアで${puzzle.points} pt。`:'')+'1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
 function controls() {
   const changing=busy||sending||moveQueue.length>0;

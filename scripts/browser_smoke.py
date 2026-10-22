@@ -131,12 +131,12 @@ with sync_playwright() as p:
         expert=page.request.get(BASE_URL+'/api/games/current?difficulty=expert').json()
         assert expert['puzzle']['multiplier'] is None
         assert expert['lives']==1
-        assert expert['puzzle']['points']==30
+        assert expert['puzzle']['points']==100
         for r,c in enumerate(solutions(expert['puzzle']['regions'])[0]):move(page,r,c,9)
         expect(page.locator('.fixed-reward-label')).to_be_visible()
-        expect(page.locator('#reward-earned')).to_have_text('+30 pt')
+        expect(page.locator('#reward-earned')).to_have_text('+100 pt')
         terminal(page,'クリア！ ✦')
-        expect(page.locator('#total')).to_contain_text('35')
+        expect(page.locator('#total')).to_contain_text('105')
         with page.expect_response(lambda response: response.url.endswith('/api/games') and response.request.method == 'POST') as fresh_pending:
             page.locator('#overlay-next').click()
         fresh=fresh_pending.value.json()

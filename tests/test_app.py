@@ -203,11 +203,11 @@ def test_asset_urls_change_with_content_and_revalidate(client):
     assert main.ASSET_VERSION==expected
 
 
-def test_expert_one_mistake_fails_and_clear_is_fixed_30(client):
+def test_expert_one_mistake_fails_and_clear_is_fixed_100(client):
     register(client)
     game=start(client,'expert')
     assert game['lives']==game['puzzle']['initial_lives']==1
-    assert game['puzzle']['points']==30
+    assert game['puzzle']['points']==100
     assert game['puzzle']['scoring']=='fixed'
     assert game['puzzle']['multiplier'] is None
     request_id=nonce()
@@ -222,10 +222,10 @@ def test_expert_one_mistake_fails_and_clear_is_fixed_30(client):
     fresh=start(client,'expert')
     assert fresh['lives']==1
     result=solved(client,fresh)
-    assert result['game']['completed'] and result['game']['score']==30
-    assert result['player']['points']==30
-    assert client.get('/api/history').json()[0]['points']==30
-    assert client.get('/api/ranking').json()[0]['points']==30
+    assert result['game']['completed'] and result['game']['score']==100
+    assert result['player']['points']==100
+    assert client.get('/api/history').json()[0]['points']==100
+    assert client.get('/api/ranking').json()[0]['points']==100
 
 
 

@@ -5,7 +5,8 @@ import random
 import time
 import threading
 
-LEVELS = {'easy': (6, 3), 'medium': (7, 6), 'hard': (8, 9), 'expert': (9, 30)}
+EXPERT_POINTS = 100
+LEVELS = {'easy': (6, 3), 'medium': (7, 6), 'hard': (8, 9), 'expert': (9, EXPERT_POINTS)}
 INITIAL_LIVES = 3
 
 
@@ -21,7 +22,7 @@ def life_limit(size):
 def clear_points(size, mistakes):
     if mistakes >= life_limit(size):
         return 0
-    return 30 if size == 9 else (INITIAL_LIVES-mistakes)*multiplier(size)
+    return EXPERT_POINTS if size == 9 else (INITIAL_LIVES-mistakes)*multiplier(size)
 
 
 def solutions(regions, limit=2):
@@ -185,7 +186,7 @@ def vary_expert(seed, rng):
             break
     if not changed:
         return None
-    return dict(size=n, difficulty='expert', points=30, regions=regions,
+    return dict(size=n, difficulty='expert', points=EXPERT_POINTS, regions=regions,
                 solution=cols, fingerprint=fingerprint(regions))
 
 
