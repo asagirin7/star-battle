@@ -72,7 +72,7 @@ with sync_playwright() as p:
         expect(page.locator('.cell').nth(cols[0])).to_have_text('★')
         assert page.request.get(BASE_URL+'/api/games/current').json()['id']==game['id']
         for r,c in list(enumerate(cols))[1:]:move(page,r,c,n)
-        expect(page.locator('#status')).to_contain_text('残機 2 = +2 pt')
+        expect(page.locator('#status')).to_contain_text('残機 2 × 1 = +2 pt')
         page.locator('[data-tab="ranking"]').click()
         expect(page.locator('#ranking-list .list-row.mine')).to_contain_text('2 pt')
         page.locator('[data-tab="history"]').click()
@@ -81,7 +81,7 @@ with sync_playwright() as p:
         second=advance(page)
         assert second['puzzle']['id']!=game['puzzle']['id']
         for r,c in enumerate(solutions(second['puzzle']['regions'])[0]):move(page,r,c,n)
-        expect(page.locator('#status')).to_contain_text('残機 3 = +3 pt')
+        expect(page.locator('#status')).to_contain_text('残機 3 × 1 = +3 pt')
         expect(page.locator('#total')).to_contain_text('5')
         third=advance(page)
         wrong=(solutions(third['puzzle']['regions'])[0][0]+1)%n

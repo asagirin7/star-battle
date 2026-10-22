@@ -23,9 +23,31 @@ def test_legacy_history_migrates_to_three_lives(tmp_path):
     alembic('check')
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT name FROM players').fetchone()[0]=='以前のプレイヤー'
-        assert db.execute('SELECT points,mistakes FROM clears').fetchall()==[(3,0)]*3
+        assert db.execute('SELECT points,mistakes FROM clears').fetchall()==[(3,0),(6,0),(9,0)]
         assert db.execute('SELECT mistakes FROM games').fetchall()==[(0,)]*3
         assert db.execute('SELECT count(*) FROM puzzles').fetchone()[0]==0
     alembic('upgrade','head')
     with sqlite3.connect(path) as db:
-        assert db.execute('SELECT sum(points) FROM clears').fetchone()[0]==9
+        assert db.execute('SELECT sum(points) FROM clears').fetchone()[0]==18
+
+
+def test_current_history_reweights_once_and_preserves_mistakes(tmp_path):
+    path=tmp_path/'weighted.db'
+    env={**os.environ,'DATABASE_URL':f'sqlite:///{path}'}
+    def alembic(*args):
+        subprocess.run([sys.executable,'-m','alembic',*args],env=env,cwd=ROOT,check=True,capture_output=True)
+    alembic('upgrade','002')
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO players VALUES ('player','hash','既存プレイヤー')")
+        for i,level in enumerate(['easy','medium','hard']):
+            db.execute('INSERT INTO puzzles VALUES (?,?,?,?,?,?,?)',(f'p{i}',level,6+i,3,'[]','[]',str(i)*64))
+            db.execute('INSERT INTO games (id,player_id,puzzle_id,started_at,mistakes) VALUES (?,?,?,?,?)',(f'g{i}','player',f'p{i}',1.0,i))
+            db.execute('INSERT INTO clears (id,player_id,puzzle_id,game_id,points,seconds,cleared_at,mistakes) VALUES (?,?,?,?,?,?,?,?)',(f'c{i}','player',f'p{i}',f'g{i}',3-i,10,11.0,i))
+    for _ in range(2):
+        alembic('upgrade','head')
+        with sqlite3.connect(path) as db:
+            assert db.execute('SELECT points,mistakes FROM clears ORDER BY id').fetchall()==[(3,0),(4,1),(3,2)]
+            assert db.execute('SELECT points FROM puzzles ORDER BY id').fetchall()==[(3,),(6,),(9,)]
+    alembic('downgrade','002')
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(3,),(2,),(1,)]

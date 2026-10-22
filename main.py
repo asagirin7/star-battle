@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from config import database_url
 from models import Clear, Game, Move, Player, Puzzle
-from puzzle_engine import INITIAL_LIVES, generate
+from puzzle_engine import INITIAL_LIVES, generate, multiplier
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ('style.css', 'board-input.js', 'app.js')
@@ -120,7 +120,7 @@ def me(p: Player = Depends(player), session: Session = Depends(db)):
 
 def puzzle_view(puzzle):
     return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
-                points=puzzle.points, regions=puzzle.regions)
+                points=INITIAL_LIVES*multiplier(puzzle.size), multiplier=multiplier(puzzle.size), regions=puzzle.regions)
 
 
 def game_view(session, game):
@@ -227,7 +227,7 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
         if len(stars) == puzzle.size:
             game.finished_at = time.time()
             session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
-                              points=INITIAL_LIVES-game.mistakes, mistakes=game.mistakes,
+                              points=(INITIAL_LIVES-game.mistakes)*multiplier(puzzle.size), mistakes=game.mistakes,
                               seconds=max(0, int(time.time()-game.started_at))))
     session.commit()
     return dict(correct=previous.correct if previous else correct,

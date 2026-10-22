@@ -3,7 +3,7 @@ const $ = s => document.querySelector(s);
 const colors = ['#b8c8df','#e7c4ae','#c5d4b4','#d2bfde','#e4d59f','#a9d2d2','#dbb6c4','#c0c1e4'];
 const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD'};
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
-let moveQueue=[],sending=false,pendingStart=null,autoCross=false;
+let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
 try{autoCross=localStorage.getItem('star-auto-cross')==='true';}catch{}
 function requestId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -43,14 +43,40 @@ $('#profile-form').onsubmit = async event => {
 };
 function savedKey() { return `star-battle:${me.id}:${game.id}`; }
 function queueKey() { return `star-queue:${me.id}:${game.id}`; }
-function save() { try { localStorage.setItem(savedKey(), JSON.stringify(cells.map(v=>v===2?2:0))); } catch {} }
+function save() { try { localStorage.setItem(savedKey(), JSON.stringify(cells.map(v=>v===2?2:0))); } catch {} saveQueue(); }
 function saveQueue() { try {localStorage.setItem(queueKey(),JSON.stringify(moveQueue));} catch {} }
 function waiting(i) {return moveQueue.some(m=>m.row*puzzle.size+m.col===i);}
 function ended() {return !game || game.completed || game.game_over;}
 function mutable(i) {return !busy && !ended() && cells[i]!==1 && !waiting(i);}
-function restoreMemos(snapshot) {cells=cells.map((v,i)=>v===1?1:snapshot[i]===2?2:0);}
-function commit(prev) {
-  if(prev.some((v,i)=>v!==cells[i])){undo.push(prev);if(undo.length>500)undo.shift();}
+function memoSnapshot(){
+  const snapshot=cells.slice();
+  snapshot.suppressed=Object.fromEntries(moveQueue.map(m=>[m.request_id,[...(m.suppressed||[])]]));
+  return snapshot;
+}
+function restoreMemos(snapshot){
+  cells=cells.map((v,i)=>v===1?1:snapshot[i]===2?2:0);
+  for(const move of moveQueue)if(snapshot.suppressed?.[move.request_id])move.suppressed=[...snapshot.suppressed[move.request_id]];
+}
+function forbidden(row,col,i){
+  const r=Math.floor(i/puzzle.size),c=i%puzzle.size;
+  return r===row||c===col||puzzle.regions[r][c]===puzzle.regions[row][col]||(Math.abs(r-row)<=1&&Math.abs(c-col)<=1);
+}
+function visibleValue(i){return cells[i]===1?1:cells[i]===2||autoPreview.has(i)?2:0;}
+function paintMemo(i,value){
+  if(!mutable(i))return;
+  cells[i]=value;
+  for(const move of moveQueue){
+    const suppressed=new Set(move.suppressed||[]);
+    if(value===0&&autoCross&&forbidden(move.row,move.col,i))suppressed.add(i);
+    else if(value===2)suppressed.delete(i);
+    move.suppressed=[...suppressed];
+  }
+}
+function commit(prev){
+  const suppression=Object.fromEntries(moveQueue.map(m=>[m.request_id,m.suppressed||[]]));
+  if(prev.some((v,i)=>v!==cells[i])||JSON.stringify(prev.suppressed||{})!==JSON.stringify(suppression)){
+    undo.push(prev);if(undo.length>500)undo.shift();
+  }
   save();render();
 }
 function applyGame(state, loadMemos=false, draw=true) {
@@ -74,7 +100,7 @@ function applyGame(state, loadMemos=false, draw=true) {
   if(draw)render();
 }
 function gameMessage() {
-  if(game.completed)status(`クリア！ ✦ 残機 ${game.score} = +${game.score} pt。次の問題に挑戦しよう。`,true);
+  if(game.completed)status(`クリア！ ✦ 残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt。次の問題に挑戦しよう。`,true);
   else if(game.game_over)status('ゲームオーバー。NEXTゲームで、もう一度挑戦しよう。');
   else status('1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
@@ -106,7 +132,7 @@ async function choose(next=false) {
   if(moveQueue.length)pumpMoves();
 }
 function renderCell(button,i) {
-  const r=Math.floor(i/puzzle.size),c=i%puzzle.size,value=cells[i],pending=value!==1&&waiting(i);
+  const r=Math.floor(i/puzzle.size),c=i%puzzle.size,value=visibleValue(i),pending=value!==1&&waiting(i);
   button.classList.toggle('locked',value===1);
   button.classList.toggle('pending',pending);
   button.classList.toggle('marked',value===2&&!pending);
@@ -120,6 +146,11 @@ function renderCell(button,i) {
 function render() {
   if(!puzzle)return;
   const n=puzzle.size,board=$('#board');
+  autoPreview=new Set();
+  if(autoCross)for(const move of moveQueue){
+    const suppressed=new Set(move.suppressed||[]);
+    for(let i=0;i<n*n;i++)if(!suppressed.has(i)&&forbidden(move.row,move.col,i))autoPreview.add(i);
+  }
   text($('#puzzle-label'),`${label[level]} / ${puzzle.id.slice(0,8).toUpperCase()}`);
   text($('#puzzle-title'),game.completed?'クリア！ 次の星を探そう ✦':game.game_over?'もう一度、ひらめこう。':'星の居場所を見つけよう。');
   const hearts=$('#lives');
@@ -146,17 +177,13 @@ function render() {
   cells.forEach((_,i)=>renderCell(board.children[i],i));
   controls();updateTimer();
 }
-function autoMark() {
+function autoMark(stars=game.stars,skip=new Set()){
   if(!autoCross)return;
-  const n=puzzle.size;
-  game.stars.forEach(([r,c])=>{
-    for(let i=0;i<n*n;i++){
-      if(cells[i]!==0||waiting(i))continue;
-      const rr=Math.floor(i/n),cc=i%n;
-      if(rr===r||cc===c||puzzle.regions[rr][cc]===puzzle.regions[r][c]||(Math.abs(rr-r)<=1&&Math.abs(cc-c)<=1))cells[i]=2;
-    }
-  });
+  for(const [r,c] of stars)for(let i=0;i<puzzle.size**2;i++){
+    if(cells[i]===0&&!waiting(i)&&!skip.has(i)&&forbidden(r,c,i))cells[i]=2;
+  }
 }
+
 function star(i) {
   if(!mutable(i))return;
   moveQueue.push({row:Math.floor(i/puzzle.size),col:i%puzzle.size,request_id:requestId()});
@@ -167,11 +194,11 @@ async function pumpMoves() {
   sending=true;controls();
   try {
     while(moveQueue.length&&!ended()){
-      const move=moveQueue[0],result=await api(`games/${game.id}/stars`,move);
+      const move=moveQueue[0],result=await api(`games/${game.id}/stars`,{row:move.row,col:move.col,request_id:move.request_id});
       moveQueue.shift();saveQueue();
       me=result.player;profileView();applyGame(result.game,false,false);
-      const index=move.row*puzzle.size+move.col,prev=cells.slice();
-      if(result.correct)autoMark();else cells[index]=2;
+      const index=move.row*puzzle.size+move.col,prev=memoSnapshot();
+      if(result.correct)autoMark([[move.row,move.col]],new Set(move.suppressed||[]));else cells[index]=2;
       commit(prev);
       if(!result.correct){
         const cell=$('#board').children[index];cell.classList.remove('wrong');void cell.offsetWidth;cell.classList.add('wrong');cell.addEventListener('animationend',()=>cell.classList.remove('wrong'),{once:true});
@@ -183,12 +210,17 @@ async function pumpMoves() {
   finally{sending=false;render();}
 }
 const input=attachBoardInput($('#board'),{
-  blocked:()=>busy||ended(),size:()=>puzzle.size,value:i=>cells[i],mutable,
-  snapshot:()=>cells.slice(),paint:(i,value)=>{if(mutable(i))cells[i]=value;},
+  blocked:()=>busy||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
+  snapshot:memoSnapshot,paint:paintMemo,
   render:()=>render(),commit,
   restoreFirstTap:(base,i)=>{
     // Only revert this tap: another star response may have added notes between taps.
     if(cells[i]!==1&&!waiting(i))cells[i]=base[i]===2?2:0;
+    for(const move of moveQueue)if(base.suppressed?.[move.request_id]){
+      const suppressed=new Set(move.suppressed||[]);
+      if(base.suppressed[move.request_id].includes(i))suppressed.add(i);else suppressed.delete(i);
+      move.suppressed=[...suppressed];
+    }
     const entry=undo.indexOf(base);if(entry!==-1)undo.splice(entry,1);
     // star() renders the restored note and pending star together; no blank intermediate frame.
     save();
@@ -210,11 +242,11 @@ document.addEventListener('keydown',event=>{
 });
 $('#reset').onclick=()=>{
   if(busy||ended())return;
-  input.reset();const prev=cells.slice();cells=cells.map(v=>v===1?1:0);commit(prev);status('メモを消しました。残機と確定した星はそのままです。');
+  input.reset();const prev=memoSnapshot();for(let i=0;i<cells.length;i++)paintMemo(i,0);commit(prev);status('メモを消しました。残機と確定した星はそのままです。');
 };
 $('#auto-cross').onclick=()=>{
   autoCross=!autoCross;try{localStorage.setItem('star-auto-cross',String(autoCross));}catch{}
-  if(game&&!ended()){input.reset();const prev=cells.slice();autoMark();commit(prev);}else if(game)render();
+  if(game&&!ended()){input.reset();const prev=memoSnapshot();autoMark();commit(prev);}else if(game)render();
   else{$('#auto-cross').textContent=`自動で× ${autoCross?'ON':'OFF'}`;$('#auto-cross').setAttribute('aria-pressed',String(autoCross));}
 };
 function row(container, position, title, detail, points, mine=false) {

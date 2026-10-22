@@ -4,8 +4,12 @@ import json
 import random
 import time
 
-LEVELS = {'easy': (6, 3), 'medium': (7, 3), 'hard': (8, 3)}
+LEVELS = {'easy': (6, 3), 'medium': (7, 6), 'hard': (8, 9)}
 INITIAL_LIVES = 3
+
+
+def multiplier(size):
+    return size - 5
 
 
 def solutions(regions, limit=2):

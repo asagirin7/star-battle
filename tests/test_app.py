@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 import main
 from models import Base, Game, Puzzle
-from puzzle_engine import fingerprint, generate, solutions
+from puzzle_engine import fingerprint, generate, solutions, LEVELS
 
 
 def nonce():
@@ -61,7 +61,7 @@ def test_generated_unique_connected_and_varied():
         for seed in range(6):
             p = generate(level, random.Random(seed))
             assert solutions(p['regions']) == [p['solution']]
-            assert p['points'] == 3
+            assert p['points'] == LEVELS[level][1]
             assert p['fingerprint'] == fingerprint(p['regions'])
             fingerprints.add(p['fingerprint'])
             n=p['size']
@@ -76,10 +76,14 @@ def test_generated_unique_connected_and_varied():
         assert len(fingerprints)==6
 
 
-@pytest.mark.parametrize('mistakes,expected', [(0,3),(1,2),(2,1)])
-def test_remaining_lives_are_score(client, mistakes, expected):
+@pytest.mark.parametrize('level,factor', [('easy',1),('medium',2),('hard',3)])
+@pytest.mark.parametrize('mistakes,remaining', [(0,3),(1,2),(2,1)])
+def test_remaining_lives_are_score(client, mistakes, remaining, level, factor):
     register(client)
-    game=start(client)
+    game=start(client,level)
+    expected=remaining*factor
+    assert game['puzzle']['multiplier']==factor
+    assert game['puzzle']['points']==3*factor
     for _ in range(mistakes):
         star(client,game,0,wrong_col(game))
     result=solved(client,game)

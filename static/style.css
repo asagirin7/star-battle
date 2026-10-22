@@ -5,3 +5,5 @@
 
 /* Sending a star must not fade the tile background or flash adjacent controls. */
 .game-card button:disabled{opacity:1}#status{min-height:3.4em}
+/* Pointer hover must not inherit the toolbar button's gold border. */
+.cell:hover,.cell:active{border-color:#17203955}.cell:focus:not(:focus-visible){outline:none}
