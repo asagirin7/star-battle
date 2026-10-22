@@ -1,8 +1,9 @@
 import hashlib
-import json
 import os
 import secrets
 import time
+import uuid
+from typing import Literal
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -11,15 +12,15 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import database_url
-from models import Clear, Game, Player
+from models import Clear, Game, Move, Player, Puzzle
+from puzzle_engine import INITIAL_LIVES, generate
 
 ROOT = Path(__file__).resolve().parent
-PUZZLES = {p['id']: p for p in json.loads((ROOT / 'puzzles.json').read_text())}
 engine = create_engine(database_url(), pool_pre_ping=True)
 app = FastAPI(title='Star Battle', docs_url=None, redoc_url=None)
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
@@ -60,11 +61,14 @@ class Profile(BaseModel):
 
 
 class Start(BaseModel):
-    puzzle_id: str
+    difficulty: Literal['easy', 'medium', 'hard'] = 'easy'
+    request_id: uuid.UUID
 
 
-class Finish(BaseModel):
-    stars: list[tuple[int, int]] = Field(max_length=8)
+class StarAttempt(BaseModel):
+    row: int = Field(ge=0, le=7, strict=True)
+    col: int = Field(ge=0, le=7, strict=True)
+    request_id: uuid.UUID
 
 
 def stats(session, p):
@@ -106,62 +110,128 @@ def me(p: Player = Depends(player), session: Session = Depends(db)):
     return stats(session, p)
 
 
-@app.get('/api/puzzles')
-def puzzles(p: Player = Depends(player), session: Session = Depends(db)):
-    cleared = set(session.scalars(select(Clear.puzzle_id).where(Clear.player_id == p.id)))
-    return [dict(**puzzle, cleared=puzzle['id'] in cleared) for puzzle in PUZZLES.values()]
+def puzzle_view(puzzle):
+    return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
+                points=puzzle.points, regions=puzzle.regions)
+
+
+def game_view(session, game):
+    puzzle = session.get(Puzzle, game.puzzle_id)
+    stars = set((m.row, m.col) for m in session.scalars(
+        select(Move).where(Move.game_id == game.id, Move.correct.is_(True))))
+    clear = session.scalar(select(Clear).where(Clear.game_id == game.id))
+    return dict(id=game.id, started_at=game.started_at, puzzle=puzzle_view(puzzle),
+                stars=sorted(stars), mistakes=game.mistakes,
+                lives=max(0, INITIAL_LIVES-game.mistakes),
+                completed=clear is not None, score=clear.points if clear else 0,
+                seconds=(clear.seconds if clear else max(0, int((game.finished_at or time.time())-game.started_at))),
+                game_over=game.mistakes >= INITIAL_LIVES)
+
+
+@app.get('/api/games/current')
+def current(difficulty: Literal['easy', 'medium', 'hard'] = 'easy',
+            p: Player = Depends(player), session: Session = Depends(db)):
+    game = session.scalar(select(Game).join(Puzzle, Puzzle.id == Game.puzzle_id)
+                          .where(Game.player_id == p.id, Game.active.is_(True),
+                                 Puzzle.difficulty == difficulty)
+                          .order_by(Game.started_at.desc()))
+    return game_view(session, game) if game else None
+
+
+@app.get('/api/games/{game_id}')
+def get_game(game_id: str, p: Player = Depends(player), session: Session = Depends(db)):
+    game = owned_game(session, game_id, p.id)
+    return game_view(session, game)
+
+
+def owned_game(session, game_id, player_id):
+    game = session.get(Game, game_id)
+    if not game or game.player_id != player_id or not session.get(Puzzle, game.puzzle_id):
+        raise HTTPException(404, 'ゲームが見つかりません。')
+    return game
 
 
 @app.post('/api/games')
 def start(body: Start, p: Player = Depends(player), session: Session = Depends(db)):
-    if body.puzzle_id not in PUZZLES:
-        raise HTTPException(404, '問題が見つかりません。')
-    # Reuse an attempt on reload rather than creating unlimited abandoned games.
-    game = session.scalar(select(Game).where(Game.player_id == p.id, Game.puzzle_id == body.puzzle_id).order_by(Game.started_at.desc()))
-    if not game:
-        game = Game(player_id=p.id, puzzle_id=body.puzzle_id)
+    game_id = str(body.request_id)
+    existing = session.get(Game, game_id)
+    if existing:
+        if existing.player_id != p.id:
+            raise HTTPException(404, 'ゲームが見つかりません。')
+        return game_view(session, existing)
+    for _ in range(5):
+        try:
+            generated = generate(body.difficulty)
+        except TimeoutError:
+            raise HTTPException(503, '問題の生成に時間がかかっています。もう一度お試しください。')
+        if not session.scalar(select(Puzzle.id).where(Puzzle.fingerprint == generated['fingerprint'])):
+            break
+    else:
+        raise HTTPException(503, '新しい問題を作り直してください。')
+    puzzle = Puzzle(id=uuid.uuid4().hex, **generated)
+    game = Game(id=game_id, player_id=p.id, puzzle_id=puzzle.id)
+    # One current board per difficulty; completed and failed boards stay visible until Next.
+    previous = list(session.scalars(select(Game.id).join(Puzzle, Puzzle.id == Game.puzzle_id)
+                                   .where(Game.player_id == p.id, Game.active.is_(True), Puzzle.difficulty == body.difficulty)))
+    if previous:
+        session.execute(update(Game).where(Game.id.in_(previous)).values(active=False))
+    try:
+        session.add(puzzle)
+        session.flush()
         session.add(game)
         session.commit()
-    return dict(id=game.id, started_at=game.started_at)
+    except IntegrityError:
+        session.rollback()
+        existing = session.get(Game, game_id)
+        if existing and existing.player_id == p.id:
+            return game_view(session, existing)
+        raise HTTPException(409, 'もう一度、新しい問題を作成してください。')
+    return game_view(session, game)
 
 
-def valid_stars(puzzle, stars):
-    n = puzzle['size']
-    if len(stars) != n or len(set(stars)) != n:
-        return False
-    if any(not (0 <= r < n and 0 <= c < n) for r,c in stars):
-        return False
-    if any(len({f(r,c) for r,c in stars}) != n for f in
-           [lambda r,c:r, lambda r,c:c, lambda r,c:puzzle['regions'][r][c]]):
-        return False
-    return all(max(abs(r-rr),abs(c-cc)) > 1 for i,(r,c) in enumerate(stars) for rr,cc in stars[i+1:])
-
-
-@app.post('/api/games/{game_id}/complete')
-def complete(game_id: str, body: Finish, p: Player = Depends(player), session: Session = Depends(db)):
-    game = session.get(Game, game_id)
-    if not game or game.player_id != p.id:
-        raise HTTPException(404, 'ゲームが見つかりません。')
-    puzzle = PUZZLES[game.puzzle_id]
-    if not valid_stars(puzzle, body.stars):
-        raise HTTPException(422, '星の配置を見直してください。')
-    existing = session.scalar(select(Clear).where(Clear.player_id == p.id, Clear.puzzle_id == game.puzzle_id))
-    awarded = 0
-    if not existing:
-        session.add(Clear(player_id=p.id, puzzle_id=game.puzzle_id, game_id=game.id,
-                          points=puzzle['points'], seconds=max(0, int(time.time()-game.started_at))))
-        try:
-            session.commit()
-            awarded = puzzle['points']
-        except IntegrityError:
-            session.rollback()  # Another tab completed the same puzzle concurrently.
-    return dict(awarded=awarded, player=stats(session, p))
+@app.post('/api/games/{game_id}/stars')
+def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), session: Session = Depends(db)):
+    game = owned_game(session, game_id, p.id)
+    puzzle = session.get(Puzzle, game.puzzle_id)
+    if body.row >= puzzle.size or body.col >= puzzle.size:
+        raise HTTPException(422, '盤面の範囲外です。')
+    # The UPDATE serializes mutations on PostgreSQL and SQLite, including concurrent retries.
+    session.execute(update(Game).where(Game.id == game.id).values(move_revision=Game.move_revision+1))
+    session.refresh(game)
+    previous = session.scalar(select(Move).where(Move.game_id == game.id,
+                                                 Move.request_id == str(body.request_id)))
+    if previous and (previous.row != body.row or previous.col != body.col):
+        session.rollback()
+        raise HTTPException(409, '同じ操作IDを別のマスに使うことはできません。')
+    state = game_view(session, game)
+    correct = puzzle.solution[body.row] == body.col
+    if not previous and not state['completed'] and not state['game_over']:
+        session.add(Move(game_id=game.id, request_id=str(body.request_id),
+                         row=body.row, col=body.col, correct=correct))
+        if not correct:
+            game.mistakes += 1
+            if game.mistakes >= INITIAL_LIVES:
+                game.finished_at = time.time()
+        session.flush()
+        stars = set(map(tuple, state['stars']))
+        if correct:
+            stars.add((body.row, body.col))
+        if len(stars) == puzzle.size:
+            game.finished_at = time.time()
+            session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
+                              points=INITIAL_LIVES-game.mistakes, mistakes=game.mistakes,
+                              seconds=max(0, int(time.time()-game.started_at))))
+    session.commit()
+    return dict(correct=previous.correct if previous else correct,
+                game=game_view(session, game), player=stats(session, p))
 
 
 @app.get('/api/history')
 def history(p: Player = Depends(player), session: Session = Depends(db)):
     rows = session.scalars(select(Clear).where(Clear.player_id == p.id).order_by(Clear.cleared_at.desc()).limit(100))
-    return [dict(puzzle_id=c.puzzle_id, points=c.points, seconds=c.seconds, cleared_at=c.cleared_at) for c in rows]
+    return [dict(puzzle_id=c.puzzle_id, points=c.points, mistakes=c.mistakes, seconds=c.seconds,
+                 difficulty=(session.get(Puzzle, c.puzzle_id).difficulty if session.get(Puzzle, c.puzzle_id)
+                             else c.puzzle_id.split('-')[0]), cleared_at=c.cleared_at) for c in rows]
 
 
 @app.get('/api/ranking')

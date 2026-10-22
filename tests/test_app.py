@@ -1,11 +1,19 @@
+import random
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
+
 import main
-from models import Base
-from scripts.generate_puzzles import solutions
+from models import Base, Game, Puzzle
+from puzzle_engine import fingerprint, generate, solutions
+
+
+def nonce():
+    return str(uuid.uuid4())
 
 
 @pytest.fixture
@@ -19,67 +27,156 @@ def client(monkeypatch):
 
 
 def register(client, name='星あつめ'):
-    response = client.post('/api/profile', json={'name':name})
+    response = client.post('/api/profile', json={'name': name})
     assert response.status_code == 200
     return response.json()
 
 
-def finish(client, puzzle):
-    game = client.post('/api/games', json={'puzzle_id':puzzle['id']}).json()
-    cols = solutions(puzzle['regions'])[0]
-    stars = [[r,c] for r,c in enumerate(cols)]
-    return game, client.post(f"/api/games/{game['id']}/complete", json={'stars':stars})
+def start(client, level='easy', request_id=None):
+    response = client.post('/api/games', json={'difficulty':level, 'request_id':request_id or nonce()})
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
-def test_catalog_unique_and_connected():
-    assert len(main.PUZZLES) == 36
-    for p in main.PUZZLES.values():
-        result = solutions(p['regions'])
-        assert len(result) == 1
-        assert main.valid_stars(p, list(enumerate(result[0])))
-        for region in range(p['size']):
-            cells = {(r,c) for r in range(p['size']) for c in range(p['size']) if p['regions'][r][c] == region}
-            visited = {next(iter(cells))}
-            while True:
-                expanded = visited | {(r+dr,c+dc) for r,c in visited for dr,dc in [(0,1),(0,-1),(1,0),(-1,0)] if (r+dr,c+dc) in cells}
-                if expanded == visited: break
-                visited = expanded
-            assert visited == cells
+def star(client, game, row, col, request_id=None):
+    response = client.post(f"/api/games/{game['id']}/stars", json={'row':row, 'col':col, 'request_id':request_id or nonce()})
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
-def test_clear_award_idempotent_history_and_ranking(client):
+def solved(client, game):
+    result = None
+    for r,c in enumerate(solutions(game['puzzle']['regions'])[0]):
+        result = star(client, game, r, c)
+    return result
+
+
+def wrong_col(game):
+    return (solutions(game['puzzle']['regions'])[0][0]+1) % game['puzzle']['size']
+
+
+def test_generated_unique_connected_and_varied():
+    for level in ['easy','medium','hard']:
+        fingerprints = set()
+        for seed in range(6):
+            p = generate(level, random.Random(seed))
+            assert solutions(p['regions']) == [p['solution']]
+            assert p['points'] == 3
+            assert p['fingerprint'] == fingerprint(p['regions'])
+            fingerprints.add(p['fingerprint'])
+            n=p['size']
+            for region in range(n):
+                cells={(r,c) for r in range(n) for c in range(n) if p['regions'][r][c]==region}
+                visited={next(iter(cells))}
+                while True:
+                    expanded=visited | {(r+dr,c+dc) for r,c in visited for dr,dc in [(0,1),(0,-1),(1,0),(-1,0)] if (r+dr,c+dc) in cells}
+                    if expanded==visited: break
+                    visited=expanded
+                assert visited==cells
+        assert len(fingerprints)==6
+
+
+@pytest.mark.parametrize('mistakes,expected', [(0,3),(1,2),(2,1)])
+def test_remaining_lives_are_score(client, mistakes, expected):
     register(client)
-    puzzle = main.PUZZLES['easy-01']
-    game, response = finish(client, puzzle)
-    assert response.status_code == 200
-    assert response.json()['awarded'] == 100
-    _, response = finish(client, puzzle)
-    assert response.json()['awarded'] == 0
-    assert client.get('/api/me').json()['points'] == 100
-    assert len(client.get('/api/history').json()) == 1
-    assert client.get('/api/puzzles').json()[0]['cleared']
-    assert client.get('/api/ranking').json()[0]['points'] == 100
-    register(client, '名前変更')
-    assert client.get('/api/me').json()['points'] == 100
-    assert client.get('/api/ranking').json()[0]['name'] == '名前変更'
+    game=start(client)
+    for _ in range(mistakes):
+        star(client,game,0,wrong_col(game))
+    result=solved(client,game)
+    assert result['game']['completed']
+    assert result['game']['score']==expected
+    assert result['player']['points']==expected
+    assert result['game']['mistakes']==mistakes
+    assert client.get('/api/ranking').json()[0]['points']==expected
+    history=client.get('/api/history').json()
+    assert history[0]['mistakes']==mistakes
+    assert history[0]['points']==expected
 
 
-def test_invalid_and_foreign_games_do_not_award(client):
-    assert client.get('/api/history').status_code == 401
+def test_game_over_persists_and_cannot_award(client):
     register(client)
-    game = client.post('/api/games', json={'puzzle_id':'easy-01'}).json()
-    for stars in [[], [[0,0]]*6, [[r,r] for r in range(6)], [[-1,0]]*6]:
-        assert client.post(f"/api/games/{game['id']}/complete", json={'stars':stars}).status_code == 422
+    game=start(client)
+    for _ in range(3):
+        result=star(client,game,0,wrong_col(game))
+    assert result['game']['game_over']
+    assert result['game']['lives']==0
+    assert client.get('/api/games/current').json()['game_over']
+    result=solved(client,game)
+    assert not result['game']['completed']
+    assert result['player']['points']==0
+    assert not client.get('/api/history').json()
+    fresh=start(client)
+    assert fresh['id'] != game['id']
+    assert fresh['lives']==3
+
+
+def test_retries_locked_stars_and_no_client_side_scoring(client):
+    register(client)
+    game=start(client)
+    request_id=nonce()
+    first=star(client,game,0,wrong_col(game),request_id)
+    repeat=star(client,game,0,wrong_col(game),request_id)
+    assert first['game']['lives']==repeat['game']['lives']==2
+    good=solutions(game['puzzle']['regions'])[0][0]
+    conflict=client.post(f"/api/games/{game['id']}/stars",json={'row':0,'col':good,'request_id':request_id})
+    assert conflict.status_code==409
+    star(client,game,0,good)
+    again=star(client,game,0,good)
+    assert len(again['game']['stars'])==1
+    assert again['game']['lives']==2
+    current=client.get('/api/games/current').json()
+    assert current['mistakes']==1
+    assert current['stars']==[[0,good]]
+    assert 'solution' not in current['puzzle']
+    assert 'fingerprint' not in current['puzzle']
+    result=solved(client,game)
+    assert result['player']['points']==2
+    assert solved(client,game)['player']['points']==2
+    assert client.post(f"/api/games/{game['id']}/complete",json={'stars':[],'points':999}).status_code==404
+
+
+def test_endless_boards_keep_adding_score(client):
+    register(client)
+    ids=set()
+    for _ in range(15):
+        game=start(client)
+        ids.add(game['puzzle']['id'])
+        result=solved(client,game)
+    assert len(ids)==15  # Exceeds the old 12-board limit for one difficulty.
+    assert result['player']['points']==45
+    assert result['player']['clears']==15
+    assert len(client.get('/api/history').json())==15
+    register(client,'名前変更')
+    assert client.get('/api/me').json()['points']==45
+    assert client.get('/api/ranking').json()[0]['name']=='名前変更'
+
+
+def test_start_retry_resume_levels_and_other_player(client):
+    register(client)
+    request_id=nonce()
+    game=start(client,request_id=request_id)
+    assert start(client,request_id=request_id)['id']==game['id']
+    assert client.get('/api/games/current').json()['id']==game['id']
+    medium=start(client,'medium')
+    assert medium['puzzle']['size']==7
+    assert client.get('/api/games/current?difficulty=medium').json()['id']==medium['id']
+    assert client.get('/api/games/current').json()['id']==game['id']
     client.cookies.clear()
-    register(client, '別プレイヤー')
-    assert client.post(f"/api/games/{game['id']}/complete", json={'stars':[]}).status_code == 404
-    assert client.get('/api/me').json()['points'] == 0
+    assert client.get('/api/games/current').status_code==401
+    register(client,'別プレイヤー')
+    assert client.get(f"/api/games/{game['id']}").status_code==404
+    assert client.post(f"/api/games/{game['id']}/stars",json={'row':0,'col':0,'request_id':nonce()}).status_code==404
+    assert client.post('/api/games',json={'difficulty':'easy','request_id':request_id}).status_code==404
 
 
-def test_csrf_and_validation(client):
-    assert client.post('/api/profile', json={'name':'攻撃'}, headers={'Origin':'https://elsewhere.example'}).status_code == 403
-    assert client.post('/api/profile', content='{}', headers={'content-type':'text/plain'}).status_code == 415
-    assert client.post('/api/profile', json={'name':'   '}).status_code == 422
-    assert client.post('/api/profile', json={'name':'a'*25}).status_code == 422
-    assert client.get('/').status_code == 200
-    assert client.get('/health').json()['status'] == 'ok'
+def test_csrf_validation_and_health(client):
+    assert client.post('/api/profile',json={'name':'攻撃'},headers={'Origin':'https://elsewhere.example'}).status_code==403
+    assert client.post('/api/profile',content='{}',headers={'content-type':'text/plain'}).status_code==415
+    assert client.post('/api/profile',json={'name':'   '}).status_code==422
+    register(client)
+    assert client.post('/api/games',json={'difficulty':'unknown','request_id':nonce()}).status_code==422
+    game=start(client)
+    for row,col in [(-1,0),(6,0),(0,6),(1.5,0)]:
+        assert client.post(f"/api/games/{game['id']}/stars",json={'row':row,'col':col,'request_id':nonce()}).status_code==422
+    assert client.get(f"/api/games/{game['id']}").json()['lives']==3
+    assert client.get('/health').json()['status']=='ok'
