@@ -32,6 +32,15 @@ def move(page, r, c, n):
     return response
 
 
+def advance(page):
+    with page.expect_response(lambda response: response.url.endswith('/api/games') and response.request.method == 'POST') as pending:
+        page.locator('#advance').click()
+    game = pending.value.json()
+    expect(page.locator('#puzzle-label')).to_contain_text(game['puzzle']['id'][:8].upper())
+    expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
+    return game
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     for width, height in [(390,844), (320,740), (1280,900)]:
@@ -71,16 +80,12 @@ with sync_playwright() as p:
         page.locator('[data-tab="history"]').click()
         expect(page.locator('#history-list .list-row')).to_contain_text('ミス1回')
         page.locator('[data-tab="play"]').click()
-        page.locator('#advance').click()
-        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
-        second=page.request.get(BASE_URL+'/api/games/current').json()
+        second=advance(page)
         assert second['puzzle']['id']!=game['puzzle']['id']
         for r,c in enumerate(solutions(second['puzzle']['regions'])[0]):move(page,r,c,n)
         expect(page.locator('#status')).to_contain_text('残機 3 = +3 pt')
         expect(page.locator('#total')).to_contain_text('5')
-        page.locator('#advance').click()
-        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
-        third=page.request.get(BASE_URL+'/api/games/current').json()
+        third=advance(page)
         wrong=(solutions(third['puzzle']['regions'])[0][0]+1)%n
         for _ in range(3):move(page,0,wrong,n)
         expect(page.locator('#status')).to_contain_text('ゲームオーバー')
@@ -94,8 +99,7 @@ with sync_playwright() as p:
         page.locator('[data-level="easy"]').click()
         expect(page.locator('.cell')).to_have_count(36)
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 3回')
-        page.locator('#advance').click()
-        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
+        advance(page)
         ROOT.joinpath('artifacts').mkdir(exist_ok=True)
         page.screenshot(path=str(ROOT/f'artifacts/{width}.png'),full_page=True)
         assert not errors,errors
