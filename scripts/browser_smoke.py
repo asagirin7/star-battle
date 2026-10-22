@@ -32,12 +32,25 @@ def move(page, r, c, n):
     return response
 
 
+def terminal(page, title):
+    expect(page.locator('#clear-celebration')).not_to_be_visible()
+    expect(page.locator('#game-over')).to_be_visible()
+    expect(page.locator('#result-title')).to_have_text(title)
+    expect(page.locator('#overlay-next')).to_be_enabled()
+    board=page.locator('#board').bounding_box()
+    button=page.locator('#overlay-next').bounding_box()
+    assert board and button
+    assert board['x'] <= button['x'] and button['x']+button['width'] <= board['x']+board['width']
+    assert board['y'] <= button['y'] and button['y']+button['height'] <= board['y']+board['height']
+
+
 def advance(page):
     with page.expect_response(lambda response: response.url.endswith('/api/games') and response.request.method == 'POST') as pending:
         (page.locator('#overlay-next') if page.locator('#game-over').is_visible() else page.locator('#advance')).click()
     game = pending.value.json()
     expect(page.locator('#puzzle-label')).to_contain_text(game['puzzle']['id'][:8].upper())
     expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
+    expect(page.locator('#game-over')).to_be_hidden()
     return game
 
 
@@ -73,6 +86,15 @@ with sync_playwright() as p:
         assert page.request.get(BASE_URL+'/api/games/current').json()['id']==game['id']
         for r,c in list(enumerate(cols))[1:]:move(page,r,c,n)
         expect(page.locator('#status')).to_contain_text('残機 2 × 1 = +2 pt')
+        expect(page.locator('#clear-celebration')).to_be_visible()
+        expect(page.locator('#reward-lives')).to_have_text('♥♥')
+        expect(page.locator('#reward-multiplier')).to_have_text('1')
+        expect(page.locator('#reward-earned')).to_have_text('+2 pt')
+        terminal(page,'クリア！ ✦')
+        expect(page.locator('#total')).to_contain_text('2')
+        page.reload()
+        terminal(page,'クリア！ ✦')
+        expect(page.locator('#result-message')).to_have_text('残機 2 × 1 = +2 pt')
         page.locator('[data-tab="ranking"]').click()
         expect(page.locator('#ranking-list .list-row.mine')).to_contain_text('2 pt')
         page.locator('[data-tab="history"]').click()
@@ -82,14 +104,19 @@ with sync_playwright() as p:
         assert second['puzzle']['id']!=game['puzzle']['id']
         for r,c in enumerate(solutions(second['puzzle']['regions'])[0]):move(page,r,c,n)
         expect(page.locator('#status')).to_contain_text('残機 3 × 1 = +3 pt')
+        expect(page.locator('#clear-celebration')).to_be_visible()
+        page.locator('#finish-celebration').click()
+        terminal(page,'クリア！ ✦')
         expect(page.locator('#total')).to_contain_text('5')
         third=advance(page)
         wrong=(solutions(third['puzzle']['regions'])[0][0]+1)%n
         for _ in range(3):move(page,0,wrong,n)
         expect(page.locator('#status')).to_contain_text('ゲームオーバー')
+        terminal(page,'ゲームオーバー')
         page.reload()
         page.locator('.cell').first.wait_for()
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 3回')
+        terminal(page,'ゲームオーバー')
         for difficulty,n in [('medium',7),('hard',8)]:
             page.locator(f'[data-level="{difficulty}"]').click()
             expect(page.locator('.cell')).to_have_count(n*n)

@@ -4,6 +4,7 @@ const colors = ['#b8c8df','#e7c4ae','#c5d4b4','#d2bfde','#e4d59f','#a9d2d2','#db
 const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD'};
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
+let celebration=null;
 try{autoCross=localStorage.getItem('star-auto-cross')==='true';}catch{}
 function requestId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -26,10 +27,40 @@ function disabled(el,value){if(el.disabled!==value)el.disabled=value;}
 function status(message, success = false) { text($('#status'),message); $('#status').classList.toggle('success', success); }
 function profileView() {
   text($('#profile-button'),me.name);
-  const points=me.points+' ';
+  const points=(celebration?celebration.displayed:me.points)+' ';
   if($('#total').firstChild.nodeValue!==points)$('#total').firstChild.nodeValue=points;
   text($('#clear-count'),me.clears+' 問クリア');
 }
+function celebrate(completed,previousPoints) {
+  const dialog=$('#clear-celebration'),reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const start=performance.now(),duration=reduced?150:3000;
+  celebration={displayed:previousPoints,frame:0};
+  text($('#reward-lives'),'♥'.repeat(completed.lives));
+  text($('#reward-multiplier'),String(completed.puzzle.multiplier));
+  text($('#reward-earned'),`+${completed.score} pt`);
+  text($('#reward-total'),String(previousPoints));
+  dialog.dataset.phase='lives';
+  dialog.showModal();
+  function frame(now) {
+    if(!celebration)return;
+    const elapsed=now-start,progress=reduced?1:Math.min(1,Math.max(0,(elapsed-1800)/850));
+    dialog.dataset.phase=reduced||elapsed>=1800?'total':elapsed>=1100?'earned':elapsed>=550?'multiply':'lives';
+    celebration.displayed=Math.round(previousPoints+(me.points-previousPoints)*(1-(1-progress)**3));
+    text($('#reward-total'),String(celebration.displayed));profileView();
+    if(elapsed>=duration){finishCelebration();return;}
+    celebration.frame=requestAnimationFrame(frame);
+  }
+  celebration.frame=requestAnimationFrame(frame);
+}
+function finishCelebration() {
+  if(!celebration)return;
+  cancelAnimationFrame(celebration.frame);celebration=null;
+  $('#clear-celebration').close();profileView();
+  $('#total').animate([{transform:'scale(1)'},{transform:'scale(1.15)'},{transform:'scale(1)'}],{duration:matchMedia('(prefers-reduced-motion: reduce)').matches?0:400});
+  $('#overlay-next').focus({preventScroll:true});
+}
+$('#finish-celebration').onclick=finishCelebration;
+$('#clear-celebration').addEventListener('cancel',event=>{event.preventDefault();finishCelebration();});
 function openProfile() { $('#name').value = me?.name || ''; $('#profile-dialog').showModal(); }
 $('#profile-button').onclick = openProfile;
 $('#close-profile').onclick = () => $('#profile-dialog').close();
@@ -158,7 +189,11 @@ function render() {
   [...hearts.children].forEach((heart,i)=>heart.classList.toggle('lost',i>=game.lives));
   attribute(hearts,'aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
   text($('#advance'),game.completed?'次の問題に挑戦 →':game.game_over?'新しい問題で再挑戦 →':'新しい問題に挑戦 →');
-  $('#game-over').hidden=!game.game_over;
+  const result=$('#game-over');
+  result.hidden=!(game.completed||game.game_over);
+  result.classList.toggle('cleared',game.completed);
+  text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
+  text($('#result-message'),game.completed?`残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt`:'次の問題で、もう一度。');
   text($('#auto-cross'),`自動で× ${autoCross?'ON':'OFF'}`);
   attribute($('#auto-cross'),'aria-pressed',String(autoCross));
   if(board.dataset.puzzle!==puzzle.id){
@@ -196,7 +231,11 @@ async function pumpMoves() {
     while(moveQueue.length&&!ended()){
       const move=moveQueue[0],result=await api(`games/${game.id}/stars`,{row:move.row,col:move.col,request_id:move.request_id});
       moveQueue.shift();saveQueue();
-      me=result.player;profileView();applyGame(result.game,false,false);
+      const justCleared=result.game.completed&&!game.completed;
+      const previousPoints=me.points;
+      me=result.player;
+      if(justCleared)celebrate(result.game,previousPoints);
+      profileView();applyGame(result.game,false,false);
       const index=move.row*puzzle.size+move.col,prev=memoSnapshot();
       if(result.correct)autoMark([[move.row,move.col]],new Set(move.suppressed||[]));else cells[index]=2;
       commit(prev);
