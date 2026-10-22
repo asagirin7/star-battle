@@ -180,3 +180,16 @@ def test_csrf_validation_and_health(client):
         assert client.post(f"/api/games/{game['id']}/stars",json={'row':row,'col':col,'request_id':nonce()}).status_code==422
     assert client.get(f"/api/games/{game['id']}").json()['lives']==3
     assert client.get('/health').json()['status']=='ok'
+
+
+def test_asset_urls_change_with_content_and_revalidate(client):
+    response=client.get('/')
+    assert 'no-cache' in response.headers['cache-control']
+    for asset in main.ASSETS:
+        assert f'/static/{asset}?v={main.ASSET_VERSION}' in response.text
+        file=client.get(f'/static/{asset}?v={main.ASSET_VERSION}')
+        assert file.status_code==200
+        assert 'no-cache' in file.headers['cache-control']
+    import hashlib
+    expected=hashlib.sha256(b''.join((main.ROOT/'static'/name).read_bytes() for name in main.ASSETS)).hexdigest()[:16]
+    assert main.ASSET_VERSION==expected

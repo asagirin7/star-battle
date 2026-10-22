@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, func, select, update
@@ -21,6 +21,11 @@ from models import Clear, Game, Move, Player, Puzzle
 from puzzle_engine import INITIAL_LIVES, generate
 
 ROOT = Path(__file__).resolve().parent
+ASSETS = ('style.css', 'board-input.js', 'app.js')
+ASSET_VERSION = hashlib.sha256(b''.join((ROOT / 'static' / name).read_bytes() for name in ASSETS)).hexdigest()[:16]
+INDEX_HTML = (ROOT / 'static/index.html').read_text()
+for asset in ASSETS:
+    INDEX_HTML = INDEX_HTML.replace(f'/static/{asset}', f'/static/{asset}?v={ASSET_VERSION}')
 # The free database allows 5 connections; leave room for migrations and administration.
 engine = create_engine(database_url(), pool_pre_ping=True, pool_size=3, max_overflow=0)
 app = FastAPI(title='Star Battle', docs_url=None, redoc_url=None)
@@ -41,6 +46,8 @@ async def security(request: Request, call_next):
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     if request.url.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
+    elif request.url.path == '/' or request.url.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return response
 
 
@@ -79,7 +86,7 @@ def stats(session, p):
 
 @app.get('/')
 def index():
-    return FileResponse(ROOT / 'static/index.html')
+    return HTMLResponse(INDEX_HTML)
 
 
 @app.get('/health')
