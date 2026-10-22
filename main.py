@@ -21,7 +21,8 @@ from models import Clear, Game, Move, Player, Puzzle
 from puzzle_engine import INITIAL_LIVES, generate
 
 ROOT = Path(__file__).resolve().parent
-engine = create_engine(database_url(), pool_pre_ping=True)
+# The free database allows 5 connections; leave room for migrations and administration.
+engine = create_engine(database_url(), pool_pre_ping=True, pool_size=3, max_overflow=0)
 app = FastAPI(title='Star Battle', docs_url=None, redoc_url=None)
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
 
