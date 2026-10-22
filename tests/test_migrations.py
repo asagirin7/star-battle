@@ -74,3 +74,26 @@ def test_expert_history_changes_to_fixed_100_once(tmp_path):
     alembic('downgrade','003')
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(30,),(0,),(9,)]
+
+
+
+def test_relaxed_history_changes_to_50_without_affecting_other_modes(tmp_path):
+    path=tmp_path/'relaxed.db'
+    env={**os.environ,'DATABASE_URL':f'sqlite:///{path}'}
+    def alembic(*args):
+        subprocess.run([sys.executable,'-m','alembic',*args],env=env,cwd=ROOT,check=True,capture_output=True)
+    alembic('upgrade','004')
+    with sqlite3.connect(path) as db:
+        db.execute("INSERT INTO players VALUES ('p','hash','既存プレイヤー')")
+        for i,(level,size,points,mistakes) in enumerate([('expert_relaxed',9,100,0),('expert_relaxed',9,0,1),('expert',9,100,0),('hard',8,9,0)]):
+            db.execute('INSERT INTO puzzles VALUES (?,?,?,?,?,?,?)',(f'p{i}',level,size,points,'[]','[]',str(i)*64))
+            db.execute('INSERT INTO games (id,player_id,puzzle_id,started_at,mistakes) VALUES (?,?,?,?,?)',(f'g{i}','p',f'p{i}',1.0,mistakes))
+            db.execute('INSERT INTO clears (id,player_id,puzzle_id,game_id,points,seconds,cleared_at,mistakes) VALUES (?,?,?,?,?,?,?,?)',(f'c{i}','p',f'p{i}',f'g{i}',points,10,11.0,mistakes))
+    for _ in range(2):
+        alembic('upgrade','head')
+        with sqlite3.connect(path) as db:
+            assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(50,),(0,),(100,),(9,)]
+            assert db.execute('SELECT points FROM puzzles ORDER BY id').fetchall()==[(50,),(50,),(100,),(9,)]
+    alembic('downgrade','004')
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(100,),(0,),(100,),(9,)]

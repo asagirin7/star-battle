@@ -120,7 +120,7 @@ def me(p: Player = Depends(player), session: Session = Depends(db)):
 
 def puzzle_view(puzzle):
     return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
-                points=clear_points(puzzle.size, 0), multiplier=multiplier(puzzle.size),
+                points=clear_points(puzzle.size, 0, puzzle.difficulty), multiplier=multiplier(puzzle.size),
                 initial_lives=life_limit(puzzle.size), scoring='fixed' if puzzle.size == 9 else 'lives', regions=puzzle.regions)
 
 
@@ -232,7 +232,7 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
         if len(stars) == puzzle.size:
             game.finished_at = time.time()
             session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
-                              points=clear_points(puzzle.size, game.mistakes), mistakes=game.mistakes,
+                              points=clear_points(puzzle.size, game.mistakes, puzzle.difficulty), mistakes=game.mistakes,
                               seconds=max(0, int(time.time()-game.started_at))))
     session.commit()
     return dict(correct=previous.correct if previous else correct,

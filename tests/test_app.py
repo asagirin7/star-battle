@@ -206,11 +206,12 @@ def test_asset_urls_change_with_content_and_revalidate(client):
 
 
 @pytest.mark.parametrize('level',['expert','expert_relaxed'])
-def test_expert_one_mistake_fails_and_clear_is_fixed_100(client,level):
+def test_expert_one_mistake_fails_and_clear_has_mode_score(client,level):
+    expected=50 if level=='expert_relaxed' else 100
     register(client)
     game=start(client,level)
     assert game['lives']==game['puzzle']['initial_lives']==1
-    assert game['puzzle']['points']==100
+    assert game['puzzle']['points']==expected
     assert game['puzzle']['scoring']=='fixed'
     assert game['puzzle']['multiplier'] is None
     request_id=nonce()
@@ -225,10 +226,10 @@ def test_expert_one_mistake_fails_and_clear_is_fixed_100(client,level):
     fresh=start(client,level)
     assert fresh['lives']==1
     result=solved(client,fresh)
-    assert result['game']['completed'] and result['game']['score']==100
-    assert result['player']['points']==100
-    assert client.get('/api/history').json()[0]['points']==100
-    assert client.get('/api/ranking').json()[0]['points']==100
+    assert result['game']['completed'] and result['game']['score']==expected
+    assert result['player']['points']==expected
+    assert client.get('/api/history').json()[0]['points']==expected
+    assert client.get('/api/ranking').json()[0]['points']==expected
 
 
 
@@ -238,6 +239,7 @@ def test_expert_variants_keep_unique_connected_nontrivial_areas(level):
     seen=set()
     for _ in range(16):
         puzzle=generate(level)
+        assert puzzle['points']==LEVELS[level][1]
         assert puzzle['fingerprint'] not in seen
         seen.add(puzzle['fingerprint'])
         assert solutions(puzzle['regions'])==[puzzle['solution']]

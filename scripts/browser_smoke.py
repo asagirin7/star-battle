@@ -158,8 +158,8 @@ with sync_playwright() as p:
         assert min(counts)>=2 and counts.count(2)>=2
         for r,c in enumerate(solutions(areas)[0]):move(page,r,c,9)
         terminal(page,'クリア！ ✦')
-        expect(page.locator('#result-message')).to_have_text('ノーミスクリア！ +100 pt')
-        expect(page.locator('#total')).to_contain_text('205')
+        expect(page.locator('#result-message')).to_have_text('ノーミスクリア！ +50 pt')
+        expect(page.locator('#total')).to_contain_text('155')
         page.reload()
         terminal(page,'クリア！ ✦')
         expect(page.locator('#puzzle-label')).to_contain_text('8 × 8相当')
