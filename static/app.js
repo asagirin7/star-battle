@@ -5,7 +5,10 @@ const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT'};
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
 let celebration=null;
-try{autoCross=localStorage.getItem('star-auto-cross')==='true';}catch{}
+try{
+  autoCross=localStorage.getItem('star-auto-cross')==='true';
+  const savedLevel=localStorage.getItem('star-level');if(label[savedLevel])level=savedLevel;
+}catch{}
 function requestId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
   const bytes = crypto.getRandomValues(new Uint8Array(16)); bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
@@ -114,6 +117,7 @@ function commit(prev){
 function applyGame(state, loadMemos=false, draw=true) {
   if(loadMemos)input.reset();
   game=state;puzzle=state.puzzle;level=puzzle.difficulty;
+  try{localStorage.setItem('star-level',level);}catch{}
   if(loadMemos) {
     cells=Array(puzzle.size**2).fill(0);undo=[];moveQueue=[];
     try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length)cells=stored.map(v=>v===2?2:0);} catch {}

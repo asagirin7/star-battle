@@ -25,20 +25,29 @@ def clear_points(size, mistakes):
 
 def solutions(regions, limit=2):
     n = len(regions)
-    found = []
-    def visit(cols, used):
-        r = len(cols)
-        if r == n:
+    found, cols = [], []
+    full = (1 << n)-1
+    area_bits = [[1 << area for area in row] for row in regions]
+    def visit(row, used_cols, used_areas, previous):
+        if row == n:
             found.append(cols[:])
             return
-        for c in range(n):
-            region = regions[r][c]
-            if c in cols or region in used or (cols and abs(cols[-1]-c) <= 1):
+        available = full & ~used_cols
+        if previous >= 0:
+            available &= ~((1 << previous) | (1 << (previous+1)) | ((1 << previous) >> 1))
+        while available:
+            bit = available & -available
+            available ^= bit
+            col = bit.bit_length()-1
+            area = area_bits[row][col]
+            if used_areas & area:
                 continue
-            visit(cols + [c], used | {region})
+            cols.append(col)
+            visit(row+1, used_cols | bit, used_areas | area, col)
+            cols.pop()
             if len(found) >= limit:
                 return
-    visit([], set())
+    visit(0, 0, 0, -1)
     return found
 
 

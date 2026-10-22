@@ -147,6 +147,8 @@ with sync_playwright() as p:
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 1回')
         page.reload()
         terminal(page,'ゲームオーバー')
+        expect(page.locator('.cell')).to_have_count(81)
+        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 1回')
         assert not page.locator('.cell').evaluate_all("(cells)=>cells.some(b=>!b.style.background)")
         page.locator('[data-level="easy"]').click()
         expect(page.locator('.cell')).to_have_count(36)
