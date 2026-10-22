@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from config import database_url
 from models import Clear, Game, Move, Player, Puzzle
-from puzzle_engine import generate, multiplier, life_limit, clear_points
+from puzzle_engine import generate, multiplier, life_limit, clear_points, seed_expert
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ('style.css', 'board-input.js', 'app.js')
@@ -168,6 +168,10 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
         if existing.player_id != p.id:
             raise HTTPException(404, 'ゲームが見つかりません。')
         return game_view(session, existing)
+    if body.difficulty == 'expert':
+        stored = session.scalar(select(Puzzle).where(Puzzle.difficulty == 'expert').limit(1))
+        if stored:
+            seed_expert(dict(size=stored.size, regions=stored.regions, solution=stored.solution))
     for _ in range(5):
         try:
             generated = generate(body.difficulty)

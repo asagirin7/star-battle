@@ -3,6 +3,7 @@ import hashlib
 import json
 import random
 import time
+import threading
 
 LEVELS = {'easy': (6, 3), 'medium': (7, 6), 'hard': (8, 9), 'expert': (9, 30)}
 INITIAL_LIVES = 3
@@ -60,23 +61,26 @@ def fingerprint(regions):
     return hashlib.sha256(json.dumps(normalized).encode()).hexdigest()
 
 
+def valid_area(regions, area):
+    n = len(regions)
+    cells = {(r,c) for r in range(n) for c in range(n) if regions[r][c] == area}
+    if len(cells) < 3 or len({r for r,c in cells}) < 2 or len({c for r,c in cells}) < 2:
+        return False
+    seen = {next(iter(cells))}
+    todo = list(seen)
+    while todo:
+        r,c = todo.pop()
+        for rr,cc in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]:
+            if (rr,cc) in cells and (rr,cc) not in seen:
+                seen.add((rr,cc));todo.append((rr,cc))
+    return seen == cells
+
+
 def challenging_regions(regions, cols, rng, deadline):
     """Refine connected areas while preserving the planted solution."""
     n = len(regions)
     fixed = {(r,c) for r,c in enumerate(cols)}
-    def valid(area):
-        cells = {(r,c) for r in range(n) for c in range(n) if regions[r][c] == area}
-        if len(cells) < 3 or len({r for r,c in cells}) < 2 or len({c for r,c in cells}) < 2:
-            return False
-        seen = {next(iter(cells))}
-        todo = list(seen)
-        while todo:
-            r,c = todo.pop()
-            for rr,cc in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]:
-                if (rr,cc) in cells and (rr,cc) not in seen:
-                    seen.add((rr,cc));todo.append((rr,cc))
-        return seen == cells
-    if not all(valid(i) for i in range(n)):
+    if not all(valid_area(regions,i) for i in range(n)):
         return False
     current = solutions(regions, limit=100)
     for _ in range(250):
@@ -97,7 +101,7 @@ def challenging_regions(regions, cols, rng, deadline):
         for r,c,target in candidates:
             old = regions[r][c]
             regions[r][c] = target
-            if valid(old) and valid(target):
+            if valid_area(regions,old) and valid_area(regions,target):
                 possible = solutions(regions, limit=100)
                 if len(possible) <= len(current):
                     current = possible;changed = True
@@ -108,7 +112,7 @@ def challenging_regions(regions, cols, rng, deadline):
     return False
 
 
-def generate(difficulty, rng=None, timeout=5):
+def _generate(difficulty, rng=None, timeout=5):
     rng = rng or random.SystemRandom()
     n, points = LEVELS[difficulty]
     deadline = time.monotonic() + timeout
@@ -144,3 +148,66 @@ def generate(difficulty, rng=None, timeout=5):
             return dict(size=n, difficulty=difficulty, points=points, regions=regions,
                         solution=cols, fingerprint=fingerprint(regions))
     raise TimeoutError('Unique puzzle generation exceeded time budget')
+
+
+_expert_lock = threading.Lock()
+_expert_seed = None
+
+
+def vary_expert(seed, rng):
+    """Walk between unique boards, retaining connectivity and area constraints."""
+    n = seed['size']
+    regions = [row[:] for row in seed['regions']]
+    stars = set(enumerate(seed['solution']))
+    for _ in range(rng.randrange(4)):
+        regions = [list(row) for row in zip(*regions[::-1])]
+        stars = {(c,n-1-r) for r,c in stars}
+    if rng.randrange(2):
+        regions = [row[::-1] for row in regions]
+        stars = {(r,n-1-c) for r,c in stars}
+    cols = [c for r,c in sorted(stars)]
+    candidates = [(r,c) for r in range(n) for c in range(n) if (r,c) not in stars]
+    rng.shuffle(candidates)
+    changed = 0
+    target_changes = rng.randint(3,8)
+    for r,c in candidates:
+        targets = list({regions[rr][cc] for rr,cc in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]
+                        if 0 <= rr < n and 0 <= cc < n} - {regions[r][c]})
+        rng.shuffle(targets)
+        for target in targets:
+            old = regions[r][c]
+            regions[r][c] = target
+            if valid_area(regions,old) and valid_area(regions,target) and len(solutions(regions)) == 1:
+                changed += 1
+                break
+            regions[r][c] = old
+        if changed >= target_changes:
+            break
+    if not changed:
+        return None
+    return dict(size=n, difficulty='expert', points=30, regions=regions,
+                solution=cols, fingerprint=fingerprint(regions))
+
+
+
+def seed_expert(puzzle):
+    """Restore a private starting layout after a process restart."""
+    global _expert_seed
+    with _expert_lock:
+        if _expert_seed is None and puzzle['size'] == 9:
+            regions = puzzle['regions']
+            if all(valid_area(regions,i) for i in range(9)) and solutions(regions) == [puzzle['solution']]:
+                _expert_seed = puzzle
+
+
+def generate(difficulty, rng=None, timeout=5):
+    global _expert_seed
+    # Keep seeded generation reproducible. Live challenges reuse only a private
+    # starting layout, changing the areas and rechecking uniqueness every time.
+    if difficulty != 'expert' or rng is not None:
+        return _generate(difficulty,rng,timeout)
+    with _expert_lock:
+        varied = vary_expert(_expert_seed,random.SystemRandom()) if _expert_seed else None
+        result = varied or _generate(difficulty,timeout=timeout)
+        _expert_seed = result
+        return result

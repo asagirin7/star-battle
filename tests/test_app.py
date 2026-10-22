@@ -226,3 +226,15 @@ def test_expert_one_mistake_fails_and_clear_is_fixed_30(client):
     assert result['player']['points']==30
     assert client.get('/api/history').json()[0]['points']==30
     assert client.get('/api/ranking').json()[0]['points']==30
+
+
+
+def test_expert_variants_keep_unique_connected_nontrivial_areas():
+    from puzzle_engine import valid_area
+    seen=set()
+    for _ in range(16):
+        puzzle=generate('expert')
+        assert puzzle['fingerprint'] not in seen
+        seen.add(puzzle['fingerprint'])
+        assert solutions(puzzle['regions'])==[puzzle['solution']]
+        assert all(valid_area(puzzle['regions'],area) for area in range(9))
