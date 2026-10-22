@@ -180,7 +180,12 @@ const input=attachBoardInput($('#board'),{
   blocked:()=>busy||ended(),size:()=>puzzle.size,value:i=>cells[i],mutable,
   snapshot:()=>cells.slice(),paint:(i,value)=>{if(mutable(i))cells[i]=value;},
   render:()=>render(),commit,
-  restoreFirstTap:base=>{restoreMemos(base);if(undo[undo.length-1]===base)undo.pop();save();render();},star
+  restoreFirstTap:(base,i)=>{
+    // Only revert this tap: another star response may have added notes between taps.
+    if(cells[i]!==1&&!waiting(i))cells[i]=base[i]===2?2:0;
+    const entry=undo.indexOf(base);if(entry!==-1)undo.splice(entry,1);
+    save();render();
+  },star
 });
 $('#retry-moves').onclick=pumpMoves;
 window.addEventListener('online',pumpMoves);

@@ -47,7 +47,7 @@ window.attachBoardInput = function(board, actions) {
     const now=performance.now();
     if(lastTap && lastTap.i===i && now-lastTap.at<DOUBLE_MS){
       const base=lastTap.prev;lastTap=null;
-      actions.restoreFirstTap(base);actions.star(i);return;
+      actions.restoreFirstTap(base,i);actions.star(i);return;
     }
     actions.paint(i,actions.value(i)===2?0:2);
     actions.commit(d.prev);lastTap={i,at:now,prev:d.prev};
