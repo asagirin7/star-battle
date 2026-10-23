@@ -54,6 +54,30 @@ def advance(page):
     return game
 
 
+def select_difficulty(page, difficulty, size):
+    """Wait for a real game response; only generation's explicit 503 is retryable."""
+    def game_response(response):
+        if response.request.method == 'POST' and response.url.endswith('/api/games'):
+            return response.request.post_data_json.get('difficulty') == difficulty
+        if response.request.method == 'GET' and response.url.endswith('/api/games/current?difficulty='+difficulty):
+            return response.status != 200 or response.json() is not None
+        return False
+    for attempt in range(3):
+        with page.expect_response(game_response, timeout=15000) as pending:
+            page.locator(f'[data-level="{difficulty}"]').click()
+        response=pending.value
+        if response.status == 503 and attempt < 2:
+            # Let choose() finish its error handling before pressing the same level.
+            expect(page.locator(f'[data-level="{difficulty}"]')).to_be_enabled()
+            continue
+        assert response.status == 200, f'{difficulty} switch failed: HTTP {response.status}: {response.text()}'
+        state=response.json()
+        assert state['puzzle']['difficulty']==difficulty and state['puzzle']['size']==size, state
+        expect(page.locator('.cell')).to_have_count(size*size,timeout=15000)
+        expect(page.locator('#puzzle-label')).to_contain_text(state['puzzle']['id'][:8].upper())
+        return state
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     for width, height in [(390,844), (320,740), (1280,900)]:
@@ -127,8 +151,7 @@ with sync_playwright() as p:
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 3回')
         terminal(page,'ゲームオーバー')
         for difficulty,n in [('medium',7),('hard',8),('expert',9)]:
-            page.locator(f'[data-level="{difficulty}"]').click()
-            expect(page.locator('.cell')).to_have_count(n*n)
+            select_difficulty(page,difficulty,n)
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         secret=page.locator('[data-level="expert"]')
         hard=page.locator('[data-level="hard"]').bounding_box()
