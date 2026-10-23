@@ -151,7 +151,7 @@ with sync_playwright() as p:
         page.evaluate('window.originalCell = document.querySelector(".cell")')
         before=geometry(page)
         with page.expect_response(lambda r:r.url.endswith('/api/games') and r.request.method=='POST') as pending:
-            page.locator('#next').click()
+            page.locator('#advance').click()
         next_game=pending.value.json()
         expect(page.locator('#puzzle-label')).to_contain_text(next_game['puzzle']['id'][:8].upper())
         expect(page.locator('#game-over')).to_be_hidden()

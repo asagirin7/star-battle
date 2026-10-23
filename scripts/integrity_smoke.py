@@ -77,7 +77,7 @@ with sync_playwright() as p:
         expect(page.locator('#puzzle-label')).to_contain_text(new['puzzle']['id'][:8].upper())
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
         expect(page.locator('#status')).to_contain_text('ミスには数えていません')
-        expect(page.locator('#next')).to_be_enabled()
+        expect(page.locator('#advance')).to_be_enabled()
         assert page.request.get(BASE_URL+'/api/me').json()['points']==0
         assert not errors,errors
         Path('artifacts').mkdir(exist_ok=True)

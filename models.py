@@ -100,3 +100,21 @@ class PlayerMerge(Base):
     target_id: Mapped[str] = mapped_column(ForeignKey('players.id'), index=True)
     completed_at: Mapped[float] = mapped_column(Float, default=time.time)
     backup: Mapped[dict] = mapped_column(JSON)
+
+
+class HintWallet(Base):
+    __tablename__ = 'hint_wallets'
+    player_id: Mapped[str] = mapped_column(ForeignKey('players.id'), primary_key=True)
+    balance: Mapped[int]
+    grant_day: Mapped[int]
+
+
+class HintUse(Base):
+    __tablename__ = 'hint_uses'
+    __table_args__ = (UniqueConstraint('player_id','request_id',name='uq_hint_request'),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    player_id: Mapped[str] = mapped_column(ForeignKey('players.id'), index=True)
+    game_id: Mapped[str] = mapped_column(ForeignKey('games.id'))
+    request_id: Mapped[str] = mapped_column(String(36))
+    snapshot: Mapped[list] = mapped_column(JSON)
+    hint: Mapped[dict] = mapped_column(JSON)

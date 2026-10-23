@@ -1,10 +1,12 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const colors = ['#b8c8df','#e7c4ae','#c5d4b4','#d2bfde','#e4d59f','#a9d2d2','#dbb6c4','#c0c1e4','#9cc8a0'];
+const hintLabels={star_exclusion:'確定星から除外',single_candidate:'残り1マス',region_to_line:'領域→行・列',line_to_region:'行・列→領域',same_region_intersection:'同じ領域の交点',n_to_n:'排他',shape_exclusion:'候補の形'};
 const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT', expert_relaxed:'9 × 9 / 8 × 8相当'};
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
 let celebration=null,expertMode='expert';
+let hintLoading=false,hintAttempt=null,hintDisplay=null,hintMessageContext=null;
 let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
 let memoBase=[],memoTimer=null,memoPromise=null;
 let sharedClearId=new URLSearchParams(location.search).get('c'),shareMessage='';
@@ -97,6 +99,7 @@ function profileView() {
   const points=(celebration?celebration.displayed:me.points)+' ';
   if($('#total').firstChild.nodeValue!==points)$('#total').firstChild.nodeValue=points;
   text($('#clear-count'),me.clears+' 問クリア');
+  hintView();
 }
 function celebrate(completed,previousPoints) {
   const dialog=$('#clear-celebration'),reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -147,7 +150,7 @@ function save() {localSave();saveQueue();scheduleMemos();}
 function saveQueue() { try {localStorage.setItem(queueKey(),JSON.stringify(moveQueue));} catch {} }
 function waiting(i) {return moveQueue.some(m=>m.row*puzzle.size+m.col===i);}
 function ended() {return !game || game.completed || game.game_over;}
-function mutable(i) {return !busy && !ended() && cells[i]!==1 && !waiting(i);}
+function mutable(i) {return !hintLoading && !busy && !ended() && cells[i]!==1 && !waiting(i);}
 function memoSnapshot(){
   const snapshot=cells.slice();
   snapshot.suppressed=Object.fromEntries(moveQueue.map(m=>[m.request_id,[...(m.suppressed||[])]]));
@@ -209,6 +212,51 @@ function applyGame(state, loadMemos=false, draw=true) {
   document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',(b.dataset.level===level||(b.dataset.level==='expert'&&level==='expert_relaxed'))));
   if(draw)render();
 }
+function hintContext(){
+  if(!game)return '';
+  return JSON.stringify([me?.id,game.id,game.stars,cells.flatMap((v,i)=>v===2?[i]:[])]);
+}
+function hintView(){
+  const context=hintContext();
+  if(hintMessageContext!==null&&hintMessageContext!==context){
+    hintDisplay=null;hintMessageContext=null;
+    text($('#hint-message'),'根拠と次の一手を示します。星や×は自動で入りません。');
+    $('#hint-legend').hidden=true;
+  }
+  text($('#hint-balance'),`残り ${Number.isInteger(me?.hints)?me.hints:'—'} 回`);
+  text($('#streak'),`${label[level]} 連続クリア ${me?.streaks?.[level]||0} 問`);
+  text($('#hint'),hintLoading?'ヒントを確認中…':'ヒントを見る');
+}
+$('#hint').onclick=async()=>{
+  if(hintLoading||busy||sending||moveQueue.length||ended()||!(me?.hints>0))return;
+  input.reset();
+  const context=hintContext(),owner=me.id,id=game.id;
+  if(hintAttempt?.context!==context){
+    const key='star-hint:'+owner+':'+id;
+    let stored=null;try{stored=JSON.parse(sessionStorage.getItem(key));}catch{}
+    hintAttempt=stored?.context===context?stored:{context,request_id:requestId()};
+    try{sessionStorage.setItem(key,JSON.stringify(hintAttempt));}catch{}
+  }
+  hintLoading=true;hintMessageContext=context;hintView();controls();
+  text($('#hint-message'),'今の盤面から使える手を確認しています…');
+  try{
+    const result=await api('hints',{game_id:id,request_id:hintAttempt.request_id,crosses:cells.flatMap((v,i)=>v===2?[i]:[])});
+    if(me?.id!==owner)return;
+    me.hints=result.balance;
+    if(context!==hintContext())return;
+    hintDisplay={context,hint:result.hint};
+    const targets=result.hint.target_cells.map(([r,c])=>`${r+1}行${c+1}列`).join('、');
+    text($('#hint-message'),`${hintLabels[result.hint.technique]||result.hint.technique}（難易度点 ${result.hint.points}）\n${result.hint.explanation}\n次の一手：${targets}に${result.hint.action==='star'?'星を置けます':'×を付けられます'}。`);
+    $('#hint-legend').hidden=false;
+  }catch(e){
+    if(context===hintContext())text($('#hint-message'),e.message);
+    // Retry a failed connection with the same ID, including after reload.
+    if(e.status&&e.status<500){hintAttempt=null;try{sessionStorage.removeItem('star-hint:'+owner+':'+id);}catch{}}
+    if(e.status===409){
+      try{const fresh=await api('me');if(me?.id===owner){me=fresh;profileView();}}catch{}
+    }
+  }finally{hintLoading=false;render();}
+};
 function rewardMessage() {
   if(game.retries)return `リトライ${game.retries}回・クリア +0 pt`;
   return puzzle.scoring==='fixed'?`ノーミスクリア！ +${game.score} pt`:`残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt`;
@@ -220,15 +268,17 @@ function gameMessage() {
   else status((puzzle.scoring==='fixed'?`9×9は1ミスで終了、クリアで${puzzle.points} pt。`:'')+'1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
 function controls() {
-  const changing=busy||sending||moveQueue.length>0;
-  for(const selector of ['#retry-board','#overlay-retry','#advance','#next','#overlay-next','#expert-mode', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
-  disabled($('#undo'),busy||ended()||!undo.length);
-  disabled($('#reset'),busy||ended());
+  const changing=busy||hintLoading||sending||moveQueue.length>0;
+  for(const selector of ['#retry-board','#overlay-retry','#advance','#overlay-next','#expert-mode', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
+  disabled($('#undo'),busy||hintLoading||ended()||!undo.length);
+  disabled($('#reset'),busy||hintLoading||ended());
+  disabled($('#hint'),changing||ended()||!me||!(me.hints>0));
+  disabled($('#auto-cross'),hintLoading);
   $('#retry-moves').hidden=!moveQueue.length||sending;
 }
 async function choose(next=false) {
   if(!me){openProfile();return;}
-  if(busy||sending||moveQueue.length)return;
+  if(busy||hintLoading||sending||moveQueue.length)return;
   busy=true;controls();
   const previousLevel=game?.puzzle.difficulty;
   try {
@@ -250,6 +300,9 @@ async function choose(next=false) {
 function renderCell(button,i) {
   const r=Math.floor(i/puzzle.size),c=i%puzzle.size,value=visibleValue(i),pending=value!==1&&waiting(i);
   button.classList.toggle('locked',value===1);
+  const matches=coords=>coords?.some(([row,col])=>row===r&&col===c);
+  button.classList.toggle('hint-source',Boolean(matches(hintDisplay?.hint.source_cells)));
+  button.classList.toggle('hint-target',Boolean(matches(hintDisplay?.hint.target_cells)));
   button.classList.toggle('pending',pending);
   button.classList.toggle('marked',value===2&&!pending);
   const glyph=value===1||pending?'★':value===2?'×':value===3?'⚑':'';
@@ -257,10 +310,11 @@ function renderCell(button,i) {
   if(mark.textContent!==glyph)mark.textContent=glyph;
   const markClass=value===2&&!pending?'mark':value===3&&!pending?'flag':'';
   if(mark.className!==markClass)mark.className=markClass;
-  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':value===3?'旗':'空白'}`);
+  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':value===3?'旗':'空白'}${matches(hintDisplay?.hint.source_cells)?'、ヒントの根拠':''}${matches(hintDisplay?.hint.target_cells)?'、ヒントの次の一手':''}`);
 }
 function render() {
   if(!puzzle)return;
+  hintView();
   const n=puzzle.size,board=$('#board');
   autoPreview=new Set();
   if(autoCross)for(const move of moveQueue){
@@ -351,7 +405,7 @@ async function pumpMoves() {
   }
 }
 const input=attachBoardInput($('#board'),{
-  blocked:()=>busy||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
+  blocked:()=>busy||hintLoading||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
   snapshot:memoSnapshot,paint:paintMemo,
   flag:i=>{const prev=memoSnapshot();paintMemo(i,cells[i]===3?0:3);commit(prev);},
   render:()=>render(),commit,
@@ -371,21 +425,21 @@ const input=attachBoardInput($('#board'),{
 $('#retry-moves').onclick=pumpMoves;
 window.addEventListener('online',pumpMoves);
 document.querySelectorAll('[data-level]').forEach(button=>button.onclick=async()=>{
-  if(busy||sending||moveQueue.length)return;level=button.dataset.level==='expert'?expertMode:button.dataset.level;await choose();
+  if(busy||hintLoading||sending||moveQueue.length)return;level=button.dataset.level==='expert'?expertMode:button.dataset.level;await choose();
 });
 $('#expert-mode').onclick=async()=>{
-  if(busy||sending||moveQueue.length)return;
+  if(busy||hintLoading||sending||moveQueue.length)return;
   level=level==='expert_relaxed'?'expert':'expert_relaxed';await choose();
 };
 $('#dismiss-result').onclick=()=>{
   if(!game?.game_over)return;
   dismissedResults.add(game.id);
   try{localStorage.setItem(savedKey()+':result-hidden','true');}catch{}
-  render();status('ゲームオーバー。盤面を確認できます。続けるときは「次の盤面」へ。');
-  $('#next').focus({preventScroll:true});
+  render();status('ゲームオーバー。盤面を確認できます。同じ盤面をリトライするか、新しい盤面へ進めます。');
+  $('#advance').focus({preventScroll:true});
 };
 async function retryBoard(){
-  if(busy||sending||moveQueue.length||!game?.game_over)return;
+  if(busy||hintLoading||sending||moveQueue.length||!game?.game_over)return;
   busy=true;controls();
   try{
     await flushMemos();
@@ -394,9 +448,9 @@ async function retryBoard(){
   }catch(e){status(e.message);}finally{busy=false;controls();}
 }
 $('#retry-board').onclick=retryBoard;$('#overlay-retry').onclick=retryBoard;
-$('#next').onclick=()=>choose(true);$('#advance').onclick=()=>choose(true);$('#overlay-next').onclick=()=>choose(true);
+$('#advance').onclick=()=>choose(true);$('#overlay-next').onclick=()=>choose(true);
 function undoMemo(){
-  if(busy||!undo.length||ended())return;
+  if(busy||hintLoading||!undo.length||ended())return;
   input.reset();restoreMemos(undo.pop());save();render();
 }
 $('#undo').onclick=undoMemo;
@@ -404,7 +458,7 @@ document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.target.closest('input,textarea,[contenteditable]')){event.preventDefault();undoMemo();}
 });
 $('#reset').onclick=()=>{
-  if(busy||ended())return;
+  if(busy||hintLoading||ended())return;
   input.reset();const prev=memoSnapshot();for(let i=0;i<cells.length;i++)paintMemo(i,0);commit(prev);status('メモを消しました。残機と確定した星はそのままです。');
 };
 $('#auto-cross').onclick=()=>{
@@ -514,7 +568,7 @@ $('#account-form').onsubmit=async event=>{
   event.preventDefault();const button=event.submitter;button.disabled=true;
   let warning='';
   try{
-    if(busy||sending||moveQueue.length)throw new Error('盤面の操作が終わってからお試しください。');
+    if(busy||hintLoading||sending||moveQueue.length)throw new Error('盤面の操作が終わってからお試しください。');
     if(accountMode==='register'&&$('#account-password').value!==$('#password-confirm').value)throw new Error('パスワードが一致しません。');
     await flushMemos();
     if(accountMode==='register'&&!me)me=await api('profile',{name:$('#login-id').value.slice(0,24)});
@@ -540,7 +594,7 @@ $('#password-form').onsubmit=async event=>{
 $('#logout').onclick=async()=>{
   const button=$('#logout');button.disabled=true;
   try{
-    if(busy||sending||moveQueue.length)throw new Error('星の送信が終わってからログアウトしてください。');
+    if(busy||hintLoading||sending||moveQueue.length)throw new Error('星の送信が終わってからログアウトしてください。');
     await flushMemos();await api('account/logout',{});location.reload();
   }catch(e){$('#account-error').textContent=e.message;}finally{button.disabled=false;}
 };
@@ -626,7 +680,7 @@ async function previewShared(){
 async function startShared(){
   if(!sharedId)return;
   if(!me){$('#shared-dialog').close();openProfile();return;}
-  if(busy||sending||moveQueue.length)throw new Error('星の送信が終わってから盤面を開いてください。');
+  if(busy||hintLoading||sending||moveQueue.length)throw new Error('星の送信が終わってから盤面を開いてください。');
   busy=true;controls();
   try{
     await flushMemos();
@@ -639,11 +693,11 @@ $('#play-shared').onclick=()=>startShared().catch(e=>{$('#shared-description').t
 $('#close-shared').onclick=()=>{sharedId=null;sharedClearId=null;history.replaceState(null,'','/');$('#shared-dialog').close();if(me)choose();else openProfile();};
 $('#shared-dialog').addEventListener('cancel',()=>{sharedId=null;sharedClearId=null;history.replaceState(null,'','/');if(me)choose();else openProfile();});
 async function refreshAccountGame(){
-  if(!me?.username||!game||document.hidden||busy||sending||moveQueue.length||memoPromise)return;
+  if(!me?.username||!game||document.hidden||busy||hintLoading||sending||moveQueue.length||memoPromise)return;
   try{
     await flushMemos();
     const id=game.id,state=await api('games/'+game.id);
-    if(game.id!==id||busy||sending||moveQueue.length)return;
+    if(game.id!==id||busy||hintLoading||sending||moveQueue.length)return;
     if(state.memo_revision!==game.memo_revision){
       const server=state.memos||Array(cells.length).fill(0);
       cells=cells.map((v,i)=>memoValue(v)!==(memoBase[i]||0)?v:server[i]);

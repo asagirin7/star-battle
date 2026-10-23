@@ -39,7 +39,7 @@ with sync_playwright() as p:
     a.locator('[data-level="easy"]').click()
     expect(a.locator('.cell')).to_have_count(36)
     with a.expect_response(lambda r:r.url.endswith('/api/games') and r.request.method=='POST') as next_game:
-        a.locator('#next').click()
+        a.locator('#advance').click()
     original=next_game.value.json()
     expect(a.locator('#puzzle-label')).to_contain_text(original['puzzle']['id'][:8].upper())
     flag(a,0)

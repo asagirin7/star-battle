@@ -11,14 +11,17 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 from sqlalchemy import create_engine, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from special_boards import load_boards
+from hint_wallet import wallet_for_launch
+from hint_engine import next_hint
+from streaks import derive_streaks
 from config import database_url
-from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, PlayerMerge, Puzzle
+from models import Account, Clear, Game, GameMemo, HintUse, HintWallet, LoginSession, Move, Player, PlayerMerge, Puzzle
 from authentication import DUMMY_HASH, issue_session, password_hash, password_matches, throttle
 from puzzle_engine import (
     LEVELS, InvalidPuzzle, certify_generated, checked_solution, clear_points,
@@ -103,9 +106,19 @@ class StarAttempt(BaseModel):
 def stats(session, p):
     points, count = session.execute(select(func.coalesce(func.sum(Clear.points), 0), func.count(Clear.id)).where(Clear.player_id == p.id)).one()
     account = session.scalar(select(Account).where(Account.player_id == p.id))
+    wallet = session.get(HintWallet,p.id)
     return dict(id=p.id, name=p.name, points=points, clears=count,
+                hints=wallet.balance if wallet else 0,streaks=derive_streaks(session,p.id),
                 username=account.username if account else None,
                 legacy_player_ids=list(session.scalars(select(PlayerMerge.source_id).where(PlayerMerge.target_id==p.id))))
+
+
+def launch_stats(session,p):
+    p=writable_player(session,p)
+    wallet_for_launch(session,p.id)
+    result=stats(session,p)
+    session.commit()
+    return result
 
 
 @app.get('/')
@@ -134,7 +147,7 @@ def profile(body: Profile, request: Request, response: Response, session: Sessio
         response.set_cookie('star_player', token, max_age=31536000, httponly=True,
                             secure=os.getenv('COOKIE_SECURE', 'false').lower() == 'true', samesite='strict')
     session.commit()
-    return stats(session, p)
+    return launch_stats(session, p)
 
 
 class Credentials(BaseModel):
@@ -158,7 +171,7 @@ def register_account(body: Credentials, request: Request, response: Response,
     except IntegrityError:
         session.rollback()
         raise HTTPException(409, 'このログインIDは使用されています。')
-    return stats(session, p)
+    return launch_stats(session, p)
 
 
 @app.post('/api/account/login')
@@ -171,7 +184,7 @@ def login_account(body: Credentials, request: Request, response: Response, sessi
         raise HTTPException(401, 'ログインIDまたはパスワードが違います。')
     issue_session(session, response, account.player_id)
     session.commit()
-    return stats(session, session.get(Player, account.player_id))
+    return launch_stats(session, session.get(Player, account.player_id))
 
 
 @app.post('/api/account/logout')
@@ -204,7 +217,7 @@ def change_password(body: PasswordChange, response: Response, p: Player = Depend
 
 @app.get('/api/me')
 def me(p: Player = Depends(player), session: Session = Depends(db)):
-    return stats(session, p)
+    return launch_stats(session, p)
 
 
 def puzzle_view(puzzle):
@@ -313,6 +326,54 @@ def owned_game(session, game_id, player_id):
     if not game or game.player_id != player_id or not session.get(Puzzle, game.puzzle_id):
         raise HTTPException(404, 'ゲームが見つかりません。')
     return game
+
+
+class HintRequest(BaseModel):
+    game_id: uuid.UUID
+    request_id: uuid.UUID
+    crosses: list[StrictInt] = Field(default_factory=list,max_length=81)
+
+
+@app.post('/api/hints')
+def get_hint(body: HintRequest,p: Player=Depends(player),session: Session=Depends(db)):
+    p=writable_player(session,p)
+    game=owned_game(session,str(body.game_id),p.id)
+    session.execute(update(Game).where(Game.id==game.id).values(move_revision=Game.move_revision+1))
+    session.refresh(game)
+    snapshot=sorted(set(body.crosses))
+    previous=session.scalar(select(HintUse).where(HintUse.player_id==p.id,HintUse.request_id==str(body.request_id)))
+    wallet=session.get(HintWallet,p.id,populate_existing=True)
+    if previous:
+        if previous.game_id!=game.id or previous.snapshot!=snapshot:
+            raise HTTPException(409,'同じヒント操作IDを別の状態には使えません。')
+        result={'hint':previous.hint,'balance':wallet.balance if wallet else 0}
+        session.commit()
+        return result
+    state=game_view(session,game)
+    if state['completed'] or state['game_over']:
+        raise HTTPException(409,'プレイ中の盤面でヒントを使えます。')
+    if not wallet or wallet.balance<=0:
+        raise HTTPException(409,'ヒントの残り回数がありません。')
+    puzzle=session.get(Puzzle,game.puzzle_id)
+    if any(type(i) is not int or not 0<=i<puzzle.size**2 for i in snapshot):
+        raise HTTPException(422,'バツの位置が盤面の範囲外です。')
+    # Check the user's exclusions against the certified board before deriving
+    # explanations. A wrong memo must never make a false star look justified.
+    canonical=checked_solution(puzzle.regions)
+    if any(r*puzzle.size+c in snapshot for r,c in enumerate(canonical)):
+        raise HTTPException(422,'バツのメモに矛盾があります。メモを見直してください（ヒント消費なし）。')
+    try:
+        hint=next_hint(puzzle.regions,stars=state['stars'],crosses=snapshot)
+    except ValueError:
+        raise HTTPException(422,'現在のメモから根拠を確認できません（ヒント消費なし）。')
+    if hint is None:
+        raise HTTPException(422,'今の状態で説明できるヒントがありません（ヒント消費なし）。')
+    wallet.balance-=1
+    session.add(HintUse(player_id=p.id,game_id=game.id,request_id=str(body.request_id),snapshot=snapshot,hint=hint))
+    session.flush()
+    result={'hint':hint,'balance':wallet.balance}
+    session.commit()
+    return result
 
 
 @app.post('/api/games/{game_id}/retry')

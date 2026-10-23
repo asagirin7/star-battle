@@ -29,7 +29,7 @@ with sync_playwright() as p:
             window.hudObserver.observe(document.getElementById(id),{childList:true,subtree:true,characterData:true,attributes:true});
           function sample(){
             window.frames.push({cells:els.map(e=>{const s=getComputedStyle(e);return {glyph:e.textContent,opacity:s.opacity,color:s.color,background:s.backgroundColor,filter:s.filter,pending:e.classList.contains('pending')};}),
-              controls:['next','advance'].map(id=>getComputedStyle(document.getElementById(id)).opacity)});
+              controls:['advance'].map(id=>getComputedStyle(document.getElementById(id)).opacity)});
             if(window.sampling)requestAnimationFrame(sample);
           }requestAnimationFrame(sample);
         }''',targets)
@@ -56,7 +56,7 @@ with sync_playwright() as p:
             styles={(f['opacity'],f['color'],f['background'],f['filter']) for f in visible}
             assert len(styles)==1,f'Star appearance changed while confirming: {styles}'
             assert visible[0]['opacity']=='1','Pending star faded the whole cell'
-        assert all(f['controls']==['1','1'] for f in data['frames']),'Controls flashed during star placement'
+        assert all(f['controls']==['1'] for f in data['frames']),'Controls flashed during star placement'
         assert data['sameHearts'],'Unchanged hearts were replaced'
         assert not data['hud'],f'Unchanged score/lives DOM was rewritten: {data["hud"][:10]}'
         assert page.request.get(BASE+'/api/me').json()['points']==0

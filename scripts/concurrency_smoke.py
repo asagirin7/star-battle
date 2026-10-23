@@ -59,3 +59,19 @@ with httpx.Client(base_url=BASE_URL,timeout=30) as c:
     assert official['retries']==1 and official['points']==0
     assert c.post(f"/api/games/{retry['id']}/retry",json={}).status_code==409
     print('PASS: concurrent explicit retry creates one trial; retry clear awards zero and shares official count')
+    fresh=c.post('/api/games',json={'difficulty':'easy','request_id':nonce()}).json()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        launches=list(executor.map(lambda _:c.get('/api/me'),range(8)))
+    assert all(r.status_code==200 and r.json()['hints']==10 for r in launches)
+    hint_request={'game_id':fresh['id'],'request_id':nonce(),'crosses':[]}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses=list(executor.map(lambda _:c.post('/api/hints',json=hint_request),range(8)))
+    assert all(r.status_code==200 and r.json()['balance']==9 for r in responses),[r.text for r in responses]
+    assert c.get('/api/me').json()['hints']==9
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        responses=list(executor.map(lambda _:c.post('/api/hints',json={**hint_request,'request_id':nonce()}),range(12)))
+    assert sum(r.status_code==200 for r in responses)==9,[r.text for r in responses]
+    assert all(r.status_code in {200,409} for r in responses)
+    assert c.get('/api/me').json()['hints']==0
+    assert c.get('/api/me').json()['points']==2
+    print('PASS: concurrent launch does not double grant; same hint spends once; concurrent distinct hints stop at zero')

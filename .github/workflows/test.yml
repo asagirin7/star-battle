@@ -32,6 +32,8 @@ jobs:
           python scripts/account_sharing_smoke.py
           python scripts/result_sharing_smoke.py
           python scripts/shared_retry_smoke.py
+          python scripts/hints_ui_smoke.py
+          python scripts/hints_integration_smoke.py
           python scripts/interaction_smoke.py
           python scripts/preview_smoke.py
           python scripts/render_smoke.py
