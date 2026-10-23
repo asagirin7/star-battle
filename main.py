@@ -206,7 +206,7 @@ def verify_game(session, game):
         if len(puzzle.regions) != puzzle.size or LEVELS[puzzle.difficulty][0] != puzzle.size:
             raise InvalidPuzzle('Mismatched board size')
     except (InvalidPuzzle,TypeError,ValueError,KeyError):
-        raise HTTPException(409,detail={'code':'invalid_puzzle','message':'盤面の整合性を確認できません。新しい問題へ切り替えます。'})
+        raise HTTPException(409,detail={'code':'invalid_puzzle','message':'盤面の整合性を確認できません。新しい盤面へ切り替えます。'})
     moves = list(session.scalars(select(Move).where(Move.game_id == game.id)))
     def matches(move):
         return 0 <= move.row < puzzle.size and 0 <= move.col < puzzle.size and canonical[move.row] == move.col
@@ -312,11 +312,11 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
     if body.puzzle_id:
         puzzle = session.get(Puzzle, body.puzzle_id)
         if not puzzle:
-            raise HTTPException(404, '共有された問題が見つかりません。')
+            raise HTTPException(404, '共有された盤面が見つかりません。')
         try:
             checked_solution(puzzle.regions)
         except InvalidPuzzle:
-            raise HTTPException(404, 'この問題は現在共有できません。')
+            raise HTTPException(404, 'この盤面は現在共有できません。')
         # Player row serializes opening the same shared puzzle on two devices.
         session.execute(update(Player).where(Player.id==p.id).values(name=Player.name))
         existing = session.scalar(select(Game).where(Game.player_id==p.id, Game.puzzle_id==puzzle.id)
@@ -337,7 +337,7 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
             existing = session.get(Game, game_id)
             if existing and existing.player_id==p.id:
                 return game_view(session,existing)
-            raise HTTPException(409, 'もう一度問題を開いてください。')
+            raise HTTPException(409, 'もう一度盤面を開いてください。')
         return game_view(session, game)
     if body.difficulty in {'expert','expert_relaxed'} and needs_seed(body.difficulty):
         stored = session.scalars(select(Puzzle).where(Puzzle.difficulty == body.difficulty)
@@ -352,11 +352,11 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
         except InvalidPuzzle:
             continue
         except TimeoutError:
-            raise HTTPException(503, '問題の生成に時間がかかっています。もう一度お試しください。')
+            raise HTTPException(503, '盤面の生成に時間がかかっています。もう一度お試しください。')
         if not session.scalar(select(Puzzle.id).where(Puzzle.fingerprint == generated['fingerprint'])):
             break
     else:
-        raise HTTPException(503, '新しい問題を作り直してください。')
+        raise HTTPException(503, '新しい盤面を作り直してください。')
     puzzle = Puzzle(id=uuid.uuid4().hex, **generated)
     game = Game(id=game_id, player_id=p.id, puzzle_id=puzzle.id)
     # One current board per difficulty; completed and failed boards stay visible until Next.
@@ -374,7 +374,7 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
         existing = session.get(Game, game_id)
         if existing and existing.player_id == p.id:
             return game_view(session, existing)
-        raise HTTPException(409, 'もう一度、新しい問題を作成してください。')
+        raise HTTPException(409, 'もう一度、新しい盤面を作成してください。')
     return game_view(session, game)
 
 
@@ -382,11 +382,11 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
 def shared_puzzle(puzzle_id: str, session: Session = Depends(db)):
     puzzle = session.get(Puzzle, puzzle_id)
     if not puzzle:
-        raise HTTPException(404, '共有された問題が見つかりません。')
+        raise HTTPException(404, '共有された盤面が見つかりません。')
     try:
         checked_solution(puzzle.regions)
     except InvalidPuzzle:
-        raise HTTPException(404, 'この問題は現在共有できません。')
+        raise HTTPException(404, 'この盤面は現在共有できません。')
     return puzzle_view(puzzle)
 
 

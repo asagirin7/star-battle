@@ -192,7 +192,7 @@ function rewardMessage() {
   return puzzle.scoring==='fixed'?`ノーミスクリア！ +${game.score} pt`:`残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt`;
 }
 function gameMessage() {
-  if(game.completed)status(`クリア！ ✦ ${rewardMessage()}。次の問題に挑戦しよう。`,true);
+  if(game.completed)status(`クリア！ ✦ ${rewardMessage()}。次の盤面に挑戦しよう。`,true);
   else if(game.game_over)status('ゲームオーバー。NEXTゲームで、もう一度挑戦しよう。');
   else status((puzzle.scoring==='fixed'?`9×9は1ミスで終了、クリアで${puzzle.points} pt。`:'')+'1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
@@ -251,12 +251,12 @@ function render() {
   if(hearts.children.length!==maxLives)hearts.replaceChildren(...Array.from({length:maxLives},()=>Object.assign(document.createElement('span'),{textContent:'♥'})));
   [...hearts.children].forEach((heart,i)=>heart.classList.toggle('lost',i>=game.lives));
   attribute(hearts,'aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
-  text($('#advance'),game.completed?'次の問題に挑戦 →':game.game_over?'新しい問題で再挑戦 →':'新しい問題に挑戦 →');
+  text($('#advance'),game.completed?'次の盤面に挑戦 →':game.game_over?'新しい盤面で再挑戦 →':'新しい盤面に挑戦 →');
   const result=$('#game-over');
   result.hidden=!(game.completed||game.game_over);
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
-  text($('#result-message'),game.completed?rewardMessage():'次の問題で、もう一度。');
+  text($('#result-message'),game.completed?rewardMessage():'次の盤面で、もう一度。');
   $('#expert-mode').hidden=n!==9;
   text($('#expert-mode'),level==='expert_relaxed'?'難しい9×9に戻す':'8×8相当の難易度にする');
   attribute($('#expert-mode'),'aria-pressed',String(level==='expert_relaxed'));
@@ -319,7 +319,7 @@ async function pumpMoves() {
   finally{sending=false;render();}
   if(replaceInvalid){
     const oldGame=game.id;await choose(true);
-    if(game.id!==oldGame)status('盤面を再検証し、新しい問題に切り替えました。ミスには数えていません。');
+    if(game.id!==oldGame)status('盤面を再検証し、新しい盤面に切り替えました。ミスには数えていません。');
   }
 }
 const input=attachBoardInput($('#board'),{
@@ -503,7 +503,7 @@ $('#share-puzzle').onclick=async()=>{
   const url=new URL('/',location.origin);url.searchParams.set('p',puzzle.id);
   $('#share-url').value=url.href;$('#share-status').textContent='';
   if(navigator.share){
-    try{await navigator.share({title:'Star Battle',text:puzzle.size+' × '+puzzle.size+'の問題に挑戦！',url:url.href});return;}
+    try{await navigator.share({title:'Star Battle',text:puzzle.size+' × '+puzzle.size+'の盤面に挑戦！',url:url.href});return;}
     catch(e){if(e.name==='AbortError')return;}
   }
   $('#share-dialog').showModal();
@@ -517,14 +517,14 @@ async function previewShared(){
   try{
     if(!/^[a-f0-9]{32}$/.test(sharedId))throw new Error('共有URLが正しくありません。');
     const shared=await api('puzzles/'+sharedId);
-    $('#shared-description').textContent=shared.size+' × '+shared.size+' / クリア最大 '+shared.points+' pt。同じ問題に挑戦します。以前遊んだ問題なら自分の続きから再開します。';
+    $('#shared-description').textContent=shared.size+' × '+shared.size+' / クリア最大 '+shared.points+' pt。同じ盤面に挑戦します。以前遊んだ盤面なら自分の続きから再開します。';
     $('#shared-dialog').showModal();
   }catch(e){sharedId=null;history.replaceState(null,'','/');status(e.message);if(me)await choose();else openProfile();}
 }
 async function startShared(){
   if(!sharedId)return;
   if(!me){$('#shared-dialog').close();openProfile();return;}
-  if(busy||sending||moveQueue.length)throw new Error('星の送信が終わってから問題を開いてください。');
+  if(busy||sending||moveQueue.length)throw new Error('星の送信が終わってから盤面を開いてください。');
   busy=true;controls();
   try{
     await flushMemos();
