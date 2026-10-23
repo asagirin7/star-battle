@@ -18,7 +18,10 @@ from sqlalchemy.orm import Session
 
 from config import database_url
 from models import Clear, Game, Move, Player, Puzzle
-from puzzle_engine import generate, multiplier, life_limit, clear_points, seed_expert
+from puzzle_engine import (
+    LEVELS, InvalidPuzzle, certify_generated, checked_solution, clear_points,
+    generate, life_limit, multiplier, needs_seed, seed_expert, valid_stars,
+)
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ('style.css', 'board-input.js', 'app.js')
@@ -124,10 +127,41 @@ def puzzle_view(puzzle):
                 initial_lives=life_limit(puzzle.size), scoring='fixed' if puzzle.size == 9 else 'lives', regions=puzzle.regions)
 
 
+def verify_game(session, game):
+    puzzle = session.get(Puzzle,game.puzzle_id)
+    try:
+        canonical = checked_solution(puzzle.regions)
+        if len(puzzle.regions) != puzzle.size or LEVELS[puzzle.difficulty][0] != puzzle.size:
+            raise InvalidPuzzle('Mismatched board size')
+    except (InvalidPuzzle,TypeError,ValueError,KeyError):
+        raise HTTPException(409,detail={'code':'invalid_puzzle','message':'盤面の整合性を確認できません。新しい問題へ切り替えます。'})
+    moves = list(session.scalars(select(Move).where(Move.game_id == game.id)))
+    def matches(move):
+        return 0 <= move.row < puzzle.size and 0 <= move.col < puzzle.size and canonical[move.row] == move.col
+    if puzzle.solution != canonical or any(move.correct != matches(move) for move in moves):
+        # Use the same lock order as star placement; a concurrent resume must
+        # not refund the same rejected correct move twice or overwrite a move.
+        session.execute(update(Game).where(Game.id == game.id).values(move_revision=Game.move_revision+1))
+        session.refresh(game)
+        moves = list(session.scalars(select(Move).where(Move.game_id == game.id)
+                                     .execution_options(populate_existing=True)))
+        puzzle.solution = canonical
+        for move in moves:
+            correct = matches(move)
+            if move.correct and not correct:
+                move.correct = False
+            elif not move.correct and correct:
+                move.correct = True
+                game.mistakes = max(0,game.mistakes-1)
+                if game.mistakes < life_limit(puzzle.size):
+                    game.finished_at = None
+    session.flush()
+    return puzzle,moves
+
+
 def game_view(session, game):
-    puzzle = session.get(Puzzle, game.puzzle_id)
-    stars = set((m.row, m.col) for m in session.scalars(
-        select(Move).where(Move.game_id == game.id, Move.correct.is_(True))))
+    puzzle,moves = verify_game(session,game)
+    stars = {(m.row,m.col) for m in moves if m.correct}
     clear = session.scalar(select(Clear).where(Clear.game_id == game.id))
     return dict(id=game.id, started_at=game.started_at, puzzle=puzzle_view(puzzle),
                 stars=sorted(stars), mistakes=game.mistakes,
@@ -144,13 +178,26 @@ def current(difficulty: Literal['easy', 'medium', 'hard', 'expert', 'expert_rela
                           .where(Game.player_id == p.id, Game.active.is_(True),
                                  Puzzle.difficulty == difficulty)
                           .order_by(Game.started_at.desc()))
-    return game_view(session, game) if game else None
+    if not game:
+        return None
+    try:
+        result = game_view(session,game)
+    except HTTPException as error:
+        if not isinstance(error.detail,dict) or error.detail.get('code') != 'invalid_puzzle':
+            raise
+        game.active = False
+        session.commit()
+        return None
+    session.commit()
+    return result
 
 
 @app.get('/api/games/{game_id}')
 def get_game(game_id: str, p: Player = Depends(player), session: Session = Depends(db)):
     game = owned_game(session, game_id, p.id)
-    return game_view(session, game)
+    result = game_view(session,game)
+    session.commit()
+    return result
 
 
 def owned_game(session, game_id, player_id):
@@ -167,14 +214,21 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
     if existing:
         if existing.player_id != p.id:
             raise HTTPException(404, 'ゲームが見つかりません。')
-        return game_view(session, existing)
-    if body.difficulty in {'expert','expert_relaxed'}:
-        stored = session.scalar(select(Puzzle).where(Puzzle.difficulty == body.difficulty).limit(1))
-        if stored:
-            seed_expert(dict(size=stored.size, difficulty=stored.difficulty, regions=stored.regions, solution=stored.solution))
+        result = game_view(session,existing)
+        session.commit()
+        return result
+    if body.difficulty in {'expert','expert_relaxed'} and needs_seed(body.difficulty):
+        stored = session.scalars(select(Puzzle).where(Puzzle.difficulty == body.difficulty)
+                                 .order_by(func.random()).limit(12))
+        for item in stored:
+            seed_expert(dict(size=item.size, difficulty=item.difficulty, regions=item.regions, solution=item.solution))
     for _ in range(5):
         try:
-            generated = generate(body.difficulty)
+            generated = certify_generated(generate(body.difficulty))
+            if generated['difficulty'] != body.difficulty:
+                raise InvalidPuzzle('Mismatched difficulty')
+        except InvalidPuzzle:
+            continue
         except TimeoutError:
             raise HTTPException(503, '問題の生成に時間がかかっています。もう一度お試しください。')
         if not session.scalar(select(Puzzle.id).where(Puzzle.fingerprint == generated['fingerprint'])):
@@ -217,7 +271,8 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
         session.rollback()
         raise HTTPException(409, '同じ操作IDを別のマスに使うことはできません。')
     state = game_view(session, game)
-    correct = puzzle.solution[body.row] == body.col
+    stars = set(map(tuple,state['stars']))
+    correct = puzzle.solution[body.row] == body.col and valid_stars(puzzle.regions,stars | {(body.row,body.col)})
     if not previous and not state['completed'] and not state['game_over']:
         session.add(Move(game_id=game.id, request_id=str(body.request_id),
                          row=body.row, col=body.col, correct=correct))
@@ -226,16 +281,15 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
             if game.mistakes >= life_limit(puzzle.size):
                 game.finished_at = time.time()
         session.flush()
-        stars = set(map(tuple, state['stars']))
         if correct:
             stars.add((body.row, body.col))
-        if len(stars) == puzzle.size:
+        if valid_stars(puzzle.regions,stars,complete=True):
             game.finished_at = time.time()
             session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
                               points=clear_points(puzzle.size, game.mistakes, puzzle.difficulty), mistakes=game.mistakes,
                               seconds=max(0, int(time.time()-game.started_at))))
     session.commit()
-    return dict(correct=previous.correct if previous else correct,
+    return dict(correct=bool(previous.correct and correct) if previous else correct,
                 game=game_view(session, game), player=stats(session, p))
 
 

@@ -280,3 +280,104 @@ def test_daily_ranking_uses_japan_midnight_and_completion_time(client,monkeypatc
     now[0]=start_of_day+2*86400
     assert client.get('/api/ranking?period=daily').json()==[]
     assert client.get('/api/ranking?period=weekly').status_code==422
+
+
+
+def test_generation_rejects_mismatched_solution_before_save(client,monkeypatch):
+    register(client)
+    broken=generate('easy',random.Random(99))
+    broken['solution']=broken['solution'][1:]+broken['solution'][:1]
+    monkeypatch.setattr(main,'generate',lambda difficulty:broken)
+    response=client.post('/api/games',json={'difficulty':'easy','request_id':nonce()})
+    assert response.status_code==503
+    with Session(main.engine) as session:
+        assert session.scalar(select(Game.id)) is None
+
+
+def test_saved_solution_and_incorrect_move_flags_are_repaired(client):
+    from models import Move
+    register(client)
+    game=start(client)
+    cols=solutions(game['puzzle']['regions'])[0]
+    bad=(cols[0]+1)%6
+    with Session(main.engine) as session:
+        puzzle=session.get(Puzzle,game['puzzle']['id'])
+        puzzle.solution=[(c+1)%6 for c in cols]
+        stored=session.get(Game,game['id'])
+        stored.mistakes=1
+        session.add_all([
+            Move(game_id=game['id'],request_id=nonce(),row=0,col=bad,correct=True),
+            Move(game_id=game['id'],request_id=nonce(),row=1,col=cols[1],correct=False)])
+        session.commit()
+    resumed=client.get('/api/games/current').json()
+    assert resumed['stars']==[[1,cols[1]]]
+    assert resumed['mistakes']==0 and resumed['lives']==3
+    with Session(main.engine) as session:
+        assert session.get(Puzzle,game['puzzle']['id']).solution==cols
+    wrong=star(client,game,0,bad)
+    assert not wrong['correct'] and wrong['game']['lives']==2
+    result=solved(client,game)
+    assert result['game']['completed'] and result['game']['score']==2
+
+
+@pytest.mark.parametrize('bad_regions',[
+    [[0]*6 for _ in range(6)],
+    [[r]*6 for r in range(6)],
+    [[0,2,2,2,2,2],[2,1,2,2,2,2],[2,2,2,2,2,2],[3]*6,[4]*6,[5]*6],
+])
+def test_unsolvable_saved_board_is_replaced_without_charging_mistake(client,bad_regions):
+    register(client)
+    game=start(client)
+    with Session(main.engine) as session:
+        session.get(Puzzle,game['puzzle']['id']).regions=bad_regions
+        session.commit()
+    response=client.post(f"/api/games/{game['id']}/stars",json={'row':0,'col':0,'request_id':nonce()})
+    assert response.status_code==409
+    assert response.json()['detail']['code']=='invalid_puzzle'
+    assert client.get('/api/games/current').json() is None
+    with Session(main.engine) as session:
+        assert session.get(Game,game['id']).mistakes==0
+    replacement=start(client)
+    assert replacement['id']!=game['id'] and replacement['lives']==3
+
+
+def test_independent_rules_reject_conflicts_and_incomplete_clears():
+    from puzzle_engine import valid_stars
+    puzzle=generate('hard',random.Random(55))
+    stars=list(enumerate(puzzle['solution']))
+    assert valid_stars(puzzle['regions'],stars,complete=True)
+    assert not valid_stars(puzzle['regions'],stars[:-1],complete=True)
+    assert not valid_stars(puzzle['regions'],[stars[0],stars[0]])
+    r,c=stars[0]
+    assert not valid_stars(puzzle['regions'],[(r,c),(r,(c+1)%8)])
+    assert not valid_stars(puzzle['regions'],[(r,c),((r+1)%8,c)])
+    assert not valid_stars(puzzle['regions'],[(0,0),(1,1)])
+
+
+def test_shape_styles_include_both_axis_spanning_and_compact():
+    from puzzle_engine import _generate,certify_generated,spanning_shapes,valid_stars
+    for mode in ['easy','medium','hard','expert','expert_relaxed']:
+        for style in ['compact','vertical','horizontal','cross']:
+            puzzle=certify_generated(_generate(mode,random.Random(10),style=style))
+            shapes=spanning_shapes(puzzle['regions'])
+            assert not shapes if style=='compact' else style in shapes
+            assert valid_stars(puzzle['regions'],enumerate(puzzle['solution']),complete=True)
+
+
+def test_expert_bank_injects_new_solution_families(monkeypatch):
+    import puzzle_engine as engine
+    rng=random.Random(456)
+    monkeypatch.setattr(engine.random,'SystemRandom',lambda:rng)
+    monkeypatch.setattr(engine,'_expert_seeds',{})
+    monkeypatch.setattr(engine,'_recent_families',{})
+    monkeypatch.setattr(engine,'_generation_counts',{})
+    families=set();profiles=set();fingerprints=set()
+    for _ in range(72):
+        puzzle=engine.generate('expert_relaxed')
+        assert engine.checked_solution(puzzle['regions'])==puzzle['solution']
+        families.add(engine.solution_family(puzzle['solution']))
+        profiles.update(engine.spanning_shapes(puzzle['regions']))
+        assert puzzle['fingerprint'] not in fingerprints
+        fingerprints.add(puzzle['fingerprint'])
+    assert len(families)>=8
+    assert profiles=={'vertical','horizontal','cross'}

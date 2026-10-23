@@ -4,6 +4,8 @@ import json
 import random
 import time
 import threading
+from functools import lru_cache
+from collections import deque
 
 EXPERT_POINTS = 100
 RELAXED_POINTS = 50
@@ -54,6 +56,76 @@ def solutions(regions, limit=2):
                 return
     visit(0, 0, 0, -1)
     return found
+
+
+
+class InvalidPuzzle(ValueError):
+    pass
+
+
+def valid_stars(regions, stars, complete=False):
+    """Check the game rules directly, independently of the search algorithm."""
+    n = len(regions)
+    stars = list(stars)
+    if complete and len(stars) != n:
+        return False
+    rows, columns, areas = set(), set(), set()
+    for r,c in stars:
+        if type(r) is not int or type(c) is not int or not (0 <= r < n and 0 <= c < n):
+            return False
+        area = regions[r][c]
+        if r in rows or c in columns or area in areas:
+            return False
+        rows.add(r);columns.add(c);areas.add(area)
+    return all(max(abs(r-rr),abs(c-cc)) > 1
+               for i,(r,c) in enumerate(stars) for rr,cc in stars[i+1:])
+
+
+@lru_cache(maxsize=1024)
+def _checked_solution(regions):
+    n = len(regions)
+    for area in range(n):
+        cells = {(r,c) for r in range(n) for c in range(n) if regions[r][c] == area}
+        visited = {next(iter(cells))}
+        todo = list(visited)
+        while todo:
+            r,c = todo.pop()
+            for neighbor in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]:
+                if neighbor in cells and neighbor not in visited:
+                    visited.add(neighbor);todo.append(neighbor)
+        if visited != cells:
+            raise InvalidPuzzle('Disconnected area')
+    found = solutions(regions)
+    if len(found) != 1 or not valid_stars(regions,enumerate(found[0]),complete=True):
+        raise InvalidPuzzle('Puzzle must have exactly one rule-valid solution')
+    return tuple(found[0])
+
+
+def checked_solution(regions):
+    n = len(regions)
+    if not 6 <= n <= 9 or any(not isinstance(row,(list,tuple)) or len(row) != n for row in regions):
+        raise InvalidPuzzle('Invalid board dimensions')
+    if any(type(area) is not int or not 0 <= area < n for row in regions for area in row):
+        raise InvalidPuzzle('Invalid area label')
+    if {area for row in regions for area in row} != set(range(n)):
+        raise InvalidPuzzle('Missing area')
+    return list(_checked_solution(tuple(tuple(row) for row in regions)))
+
+
+def certify_generated(puzzle):
+    level = puzzle['difficulty']
+    size,points = LEVELS[level]
+    regions = puzzle['regions']
+    canonical = checked_solution(regions)
+    if len(regions) != size or puzzle['size'] != size or puzzle['solution'] != canonical:
+        raise InvalidPuzzle('Stored solution does not match board')
+    if puzzle['points'] != points or puzzle['fingerprint'] != fingerprint(regions):
+        raise InvalidPuzzle('Invalid puzzle metadata')
+    if level.startswith('expert'):
+        relaxed = level == 'expert_relaxed'
+        if not all(valid_area(regions,i,relaxed) for i in range(size)) or (relaxed and not easier_clues(regions)):
+            raise InvalidPuzzle('Invalid difficulty constraints')
+    return puzzle
 
 
 def fingerprint(regions):
@@ -123,10 +195,11 @@ def challenging_regions(regions, cols, rng, deadline, relaxed=False):
     return False
 
 
-def _generate(difficulty, rng=None, timeout=5):
+def _generate(difficulty, rng=None, timeout=5, style=None):
     rng = rng or random.SystemRandom()
     n, points = LEVELS[difficulty]
     deadline = time.monotonic() + timeout
+    shape = style or rng.choice(['compact','compact','compact','vertical','horizontal','cross'])
     while time.monotonic() < deadline:
         cols = list(range(n))
         rng.shuffle(cols)
@@ -135,8 +208,17 @@ def _generate(difficulty, rng=None, timeout=5):
         regions = [[-1] * n for _ in range(n)]
         for r, c in enumerate(cols):
             regions[r][c] = r
-        frontier = list(enumerate(cols))
-        sizes = [1]*n
+        if shape in {'vertical','horizontal','cross'}:
+            roots = [r for r,c in enumerate(cols) if 1 <= r < n-1 and 1 <= c < n-1]
+            root = rng.choice(roots or list(range(n)))
+            if shape in {'horizontal','cross'}:
+                for c in range(n):
+                    regions[root][c] = root
+            if shape in {'vertical','cross'}:
+                for r in range(n):
+                    regions[r][cols[root]] = root
+        frontier = [(r,c) for r in range(n) for c in range(n) if regions[r][c] != -1]
+        sizes = [sum(row.count(i) for row in regions) for i in range(n)]
         while frontier:
             if difficulty in {'expert','expert_relaxed'}:
                 smallest = min(sizes[regions[r][c]] for r,c in frontier)
@@ -155,7 +237,11 @@ def _generate(difficulty, rng=None, timeout=5):
             frontier.append((rr, cc))
         if difficulty in {'expert','expert_relaxed'} and not challenging_regions(regions, cols, rng, deadline, difficulty == 'expert_relaxed'):
             continue
-        if len(solutions(regions)) == 1:
+        if shape == 'compact' and spanning_shapes(regions):
+            continue
+        if solutions(regions) == [cols]:
+            labels = list(range(n));rng.shuffle(labels)
+            regions = [[labels[area] for area in row] for row in regions]
             return dict(size=n, difficulty=difficulty, points=points, regions=regions,
                         solution=cols, fingerprint=fingerprint(regions))
     raise TimeoutError('Unique puzzle generation exceeded time budget')
@@ -163,6 +249,8 @@ def _generate(difficulty, rng=None, timeout=5):
 
 _expert_lock = threading.Lock()
 _expert_seeds = {}
+_recent_families = {}
+_generation_counts = {}
 
 
 def vary_expert(seed, rng):
@@ -198,32 +286,87 @@ def vary_expert(seed, rng):
             break
     if not changed:
         return None
-    return dict(size=n, difficulty=difficulty, points=LEVELS[difficulty][1], regions=regions,
-                solution=cols, fingerprint=fingerprint(regions))
+    return certify_generated(dict(size=n, difficulty=difficulty, points=LEVELS[difficulty][1], regions=regions,
+                solution=cols, fingerprint=fingerprint(regions)))
 
+
+
+def solution_family(cols):
+    """Canonicalize rotations/reflections so they do not count as fresh layouts."""
+    n = len(cols)
+    stars = set(enumerate(cols))
+    variants = []
+    for _ in range(4):
+        variants.append(tuple(c for r,c in sorted(stars)))
+        variants.append(tuple(n-1-c for r,c in sorted(stars)))
+        stars = {(c,n-1-r) for r,c in stars}
+    return min(variants)
+
+
+def spanning_shapes(regions):
+    n = len(regions)
+    shapes = set()
+    for area in range(n):
+        rows = {r for r in range(n) for c in range(n) if regions[r][c] == area}
+        cols = {c for r in range(n) for c in range(n) if regions[r][c] == area}
+        if len(rows) == n:
+            shapes.add('vertical')
+        if len(cols) == n:
+            shapes.add('horizontal')
+        if len(rows) == n and len(cols) == n:
+            shapes.add('cross')
+    return shapes
+
+
+def needs_seed(difficulty):
+    with _expert_lock:
+        return not _expert_seeds.get(difficulty)
 
 
 def seed_expert(puzzle):
-    """Restore a private starting layout after a process restart."""
-    difficulty = puzzle['difficulty']
-    relaxed = difficulty == 'expert_relaxed'
+    """Restore multiple independently checked shapes after process restarts."""
+    level = puzzle['difficulty']
+    try:
+        puzzle = dict(puzzle, points=LEVELS[level][1], fingerprint=fingerprint(puzzle['regions']))
+        certify_generated(puzzle)
+    except (InvalidPuzzle,KeyError,TypeError,ValueError):
+        return
     with _expert_lock:
-        if difficulty not in _expert_seeds and puzzle['size'] == 9:
-            regions = puzzle['regions']
-            if (all(valid_area(regions,i,relaxed) for i in range(9))
-                    and (not relaxed or easier_clues(regions))
-                    and solutions(regions) == [puzzle['solution']]):
-                _expert_seeds[difficulty] = puzzle
+        bank = _expert_seeds.setdefault(level,deque(maxlen=32))
+        if all(item['fingerprint'] != puzzle['fingerprint'] for item in bank):
+            bank.append(puzzle)
 
 
 def generate(difficulty, rng=None, timeout=5):
-    # Keep seeded generation reproducible. Live challenges reuse only a private
-    # starting layout, changing the areas and rechecking uniqueness every time.
-    if difficulty not in {'expert','expert_relaxed'} or rng is not None:
-        return _generate(difficulty,rng,timeout)
+    if rng is not None or not difficulty.startswith('expert'):
+        return certify_generated(_generate(difficulty,rng,timeout))
+    rng = random.SystemRandom()
     with _expert_lock:
-        seed = _expert_seeds.get(difficulty)
-        varied = vary_expert(seed,random.SystemRandom()) if seed else None
-        result = varied or _generate(difficulty,timeout=timeout)
-        _expert_seeds[difficulty] = result
-        return result
+        bank = _expert_seeds.setdefault(difficulty,deque(maxlen=32))
+        recent = _recent_families.setdefault(difficulty,deque(maxlen=6))
+        count = _generation_counts.get(difficulty,0)
+        _generation_counts[difficulty] = count+1
+        styles = ['compact','vertical','compact','horizontal','cross','compact']
+        desired = styles[count % len(styles)]
+        result = None
+        # Bound CPU work under load, while repeatedly injecting entirely new
+        # planted solutions instead of only rotating one cached star placement.
+        if not bank or count % 3 == 0:
+            try:
+                style = rng.choice(['vertical','horizontal','cross']) if not bank else styles[(count//3) % len(styles)]
+                result = certify_generated(_generate(difficulty,timeout=timeout if not bank else min(timeout,.25),style=style))
+            except TimeoutError:
+                if not bank:
+                    raise
+        if result is None:
+            shaped = [item for item in bank if (not spanning_shapes(item['regions']) if desired == 'compact' else desired in spanning_shapes(item['regions']))] or list(bank)
+            choices = [item for item in shaped if solution_family(item['solution']) not in recent] or shaped
+            for _ in range(5):
+                result = vary_expert(rng.choice(choices),rng)
+                if result:
+                    break
+        if result is None:
+            result = certify_generated(_generate(difficulty,timeout=timeout))
+        bank.append(result)
+        recent.append(solution_family(result['solution']))
+        return certify_generated(result)

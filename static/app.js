@@ -19,9 +19,9 @@ function requestId() {
 async function api(path, data) {
   const response = await fetch('/api/' + path, data === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
   if (!response.ok) {
-    let message = '通信に失敗しました。もう一度お試しください。';
-    try { const error = await response.json(); if (typeof error.detail === 'string') message = error.detail; } catch {}
-    const e = new Error(message); e.status = response.status; throw e;
+    let message = '通信に失敗しました。もう一度お試しください。',code;
+    try { const error = await response.json(); if (typeof error.detail === 'string') message = error.detail; else if(error.detail?.message){message=error.detail.message;code=error.detail.code;} } catch {}
+    const e = new Error(message); e.status = response.status;e.code=code; throw e;
   }
   return response.json();
 }
@@ -243,6 +243,7 @@ function star(i) {
 async function pumpMoves() {
   if(sending||busy||!moveQueue.length)return;
   sending=true;controls();
+  let replaceInvalid=false;
   try {
     while(moveQueue.length&&!ended()){
       const move=moveQueue[0],result=await api(`games/${game.id}/stars`,{row:move.row,col:move.col,request_id:move.request_id});
@@ -261,8 +262,15 @@ async function pumpMoves() {
       if(ended())gameMessage();
       else status(result.correct?'正解！ ✦ 次の星を見つけよう。':`そこには星を置けません。残機 ${game.lives}。`);
     }
-  }catch(e){status(`${e.message} 「通信を再試行」で同じ操作から再開できます。`);}
+  }catch(e){
+    if(e.code==='invalid_puzzle'){moveQueue=[];saveQueue();replaceInvalid=true;status(e.message);}
+    else status(`${e.message} 「通信を再試行」で同じ操作から再開できます。`);
+  }
   finally{sending=false;render();}
+  if(replaceInvalid){
+    const oldGame=game.id;await choose(true);
+    if(game.id!==oldGame)status('盤面を再検証し、新しい問題に切り替えました。ミスには数えていません。');
+  }
 }
 const input=attachBoardInput($('#board'),{
   blocked:()=>busy||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
