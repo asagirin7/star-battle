@@ -40,3 +40,5 @@
 .cell .flag{font-size:.8em;color:#312444}
 
 header{gap:8px}.brand{margin-right:auto}#account-button{font-size:12px}.account-tabs{display:flex;gap:8px;margin:16px 0}.account-tabs button{flex:1;font-size:12px}.account-tabs .selected{border-color:var(--gold);color:var(--gold)}#account-dialog,#share-dialog,#shared-dialog{max-height:90dvh;overflow:auto}#account-dialog label{display:block}#account-help,#account-state,#account-error,#share-status{font-size:12px;line-height:1.8}#account-manage>button{margin-top:20px}#close-account,#close-share,#close-shared{margin-top:16px}#share-url{font-size:12px}#share-puzzle{color:var(--gold)}@media(max-width:740px){header{flex-wrap:wrap;height:auto;min-height:72px;padding-top:12px;padding-bottom:12px}.profile{max-width:120px}#account-button{font-size:10px;padding:8px}.tools{flex-wrap:wrap}}
+
+#dismiss-result{display:block;margin:12px auto 0;min-width:170px;font-size:13px}

@@ -7,8 +7,27 @@ let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new
 let celebration=null,expertMode='expert';
 let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
 let memoBase=[],memoTimer=null,memoPromise=null;
+const dismissedResults=new Set();
 const memoValue=v=>v===2||v===3?v:0;
 function baseKey(){return savedKey()+':synced';}
+function importMergedNotes(){
+  for(const oldId of me?.legacy_player_ids||[]){
+    for(const prefix of ['star-battle:','star-queue:']){
+      const oldPrefix=prefix+oldId+':',entries=[];
+      try{
+        for(let i=0;i<localStorage.length;i++){
+          const key=localStorage.key(i);
+          if(key?.startsWith(oldPrefix)&&!key.endsWith(':synced'))entries.push([key,localStorage.getItem(key)]);
+        }
+        for(const [key,value] of entries){
+          const newKey=prefix+me.id+':'+key.slice(oldPrefix.length);
+          if(localStorage.getItem(newKey)===null)localStorage.setItem(newKey,value);
+        }
+      }catch{}
+    }
+  }
+}
+
 function localSave(){
   try{
     localStorage.setItem(savedKey(),JSON.stringify(cells.map(memoValue)));
@@ -171,6 +190,7 @@ function applyGame(state, loadMemos=false, draw=true) {
     if(puzzle.size===9){expertMode=level;localStorage.setItem('star-expert-mode',level);}
   }catch{}
   if(loadMemos) {
+    try{if(localStorage.getItem(savedKey()+':result-hidden')==='true')dismissedResults.add(game.id);}catch{}
     cells=Array(puzzle.size**2).fill(0);undo=[];moveQueue=[];
     try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length)cells=stored.map(v=>v===2||v===3?v:0);} catch {}
     loadServerMemos(state);
@@ -253,7 +273,8 @@ function render() {
   attribute(hearts,'aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
   text($('#advance'),game.completed?'次の盤面に挑戦 →':game.game_over?'新しい盤面で再挑戦 →':'新しい盤面に挑戦 →');
   const result=$('#game-over');
-  result.hidden=!(game.completed||game.game_over);
+  result.hidden=!(game.completed||game.game_over)||dismissedResults.has(game.id);
+  $('#dismiss-result').hidden=!game.game_over;
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
   text($('#result-message'),game.completed?rewardMessage():'次の盤面で、もう一度。');
@@ -348,6 +369,13 @@ document.querySelectorAll('[data-level]').forEach(button=>button.onclick=async()
 $('#expert-mode').onclick=async()=>{
   if(busy||sending||moveQueue.length)return;
   level=level==='expert_relaxed'?'expert':'expert_relaxed';await choose();
+};
+$('#dismiss-result').onclick=()=>{
+  if(!game?.game_over)return;
+  dismissedResults.add(game.id);
+  try{localStorage.setItem(savedKey()+':result-hidden','true');}catch{}
+  render();status('ゲームオーバー。盤面を確認できます。続けるときは「次の盤面」へ。');
+  $('#next').focus({preventScroll:true});
 };
 $('#next').onclick=()=>choose(true);$('#advance').onclick=()=>choose(true);$('#overlay-next').onclick=()=>choose(true);
 function undoMemo(){
@@ -475,6 +503,7 @@ $('#account-form').onsubmit=async event=>{
     if(accountMode==='register'&&!me)me=await api('profile',{name:$('#login-id').value.slice(0,24)});
     const previous=me?.id;
     me=await api('account/'+accountMode,{username:$('#login-id').value,password:$('#account-password').value});
+    importMergedNotes();
     if(accountMode==='register'&&!await migrateGuestMemos())warning='登録しました。一部のメモはこの端末に残っています。元の端末でその盤面を開くと再同期します。';
     profileView();$('#account-form').reset();$('#account-dialog').close();
     if(previous===me.id&&game){memoBase=game.memos||Array(cells.length).fill(0);await flushMemos();}
@@ -554,6 +583,6 @@ setInterval(refreshAccountGame,10000);
 document.addEventListener('visibilitychange',()=>{if(document.hidden){flushMemos().catch(()=>{});}else refreshAccountGame();});
 window.addEventListener('online',()=>{flushMemos().catch(()=>{});});
 (async()=>{
-  try {me=await api('me');profileView();if(sharedId)await previewShared();else await resumeOrChoose();}
+  try {me=await api('me');importMergedNotes();profileView();if(sharedId)await previewShared();else await resumeOrChoose();}
   catch(e) {if(e.status===401){if(sharedId)await previewShared();else openProfile();}else status(e.message);}
 })();

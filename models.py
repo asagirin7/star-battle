@@ -88,3 +88,11 @@ class GameMemo(Base):
     game_id: Mapped[str] = mapped_column(ForeignKey('games.id'), primary_key=True)
     cells: Mapped[list] = mapped_column(JSON)
     revision: Mapped[int] = mapped_column(default=0)
+
+
+class PlayerMerge(Base):
+    __tablename__ = 'player_merges'
+    source_id: Mapped[str] = mapped_column(ForeignKey('players.id'), primary_key=True)
+    target_id: Mapped[str] = mapped_column(ForeignKey('players.id'), index=True)
+    completed_at: Mapped[float] = mapped_column(Float, default=time.time)
+    backup: Mapped[dict] = mapped_column(JSON)

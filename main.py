@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import database_url
-from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, Puzzle
+from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, PlayerMerge, Puzzle
 from authentication import DUMMY_HASH, issue_session, password_hash, password_matches, throttle
 from puzzle_engine import (
     LEVELS, InvalidPuzzle, certify_generated, checked_solution, clear_points,
@@ -69,6 +69,17 @@ def player(request: Request, session: Session = Depends(db)):
         p = session.scalar(select(Player).where(Player.token_hash == digest))
     if not p:
         raise HTTPException(401, 'プレイヤーを登録してください。')
+    merged = session.get(PlayerMerge, p.id)
+    return session.get(Player,merged.target_id) if merged else p
+
+
+def writable_player(session, p):
+    # Serialize ownership changes with maintenance merges, then resolve any new alias.
+    session.execute(update(Player).where(Player.id==p.id).values(name=Player.name))
+    merged=session.get(PlayerMerge,p.id,populate_existing=True)
+    if merged:
+        session.execute(update(Player).where(Player.id==merged.target_id).values(name=Player.name))
+        p=session.get(Player,merged.target_id,populate_existing=True)
     return p
 
 
@@ -92,7 +103,8 @@ def stats(session, p):
     points, count = session.execute(select(func.coalesce(func.sum(Clear.points), 0), func.count(Clear.id)).where(Clear.player_id == p.id)).one()
     account = session.scalar(select(Account).where(Account.player_id == p.id))
     return dict(id=p.id, name=p.name, points=points, clears=count,
-                username=account.username if account else None)
+                username=account.username if account else None,
+                legacy_player_ids=list(session.scalars(select(PlayerMerge.source_id).where(PlayerMerge.target_id==p.id))))
 
 
 @app.get('/')
@@ -112,7 +124,7 @@ def profile(body: Profile, request: Request, response: Response, session: Sessio
     if not name or any(ord(c) < 32 for c in name):
         raise HTTPException(422, '名前を1〜24文字で入力してください。')
     try:
-        p = player(request, session)
+        p = writable_player(session, player(request, session))
         p.name = name
     except HTTPException:
         token = secrets.token_urlsafe(32)
@@ -133,6 +145,7 @@ class Credentials(BaseModel):
 def register_account(body: Credentials, request: Request, response: Response,
                      p: Player = Depends(player), session: Session = Depends(db)):
     throttle(session, 'register', request.client.host if request.client else 'unknown', 10)
+    p = writable_player(session,p)
     if session.scalar(select(Account).where(Account.player_id==p.id)):
         raise HTTPException(409, 'このプレイヤーは登録済みです。')
     session.add(Account(username=body.username.lower(), player_id=p.id, password_hash=password_hash(body.password)))
@@ -234,13 +247,13 @@ def verify_game(session, game):
 def game_view(session, game):
     puzzle,moves = verify_game(session,game)
     stars = {(m.row,m.col) for m in moves if m.correct}
-    clear = session.scalar(select(Clear).where(Clear.game_id == game.id))
+    clear = session.scalar(select(Clear).where(Clear.player_id == game.player_id, Clear.puzzle_id == game.puzzle_id))
     memo = session.get(GameMemo, game.id)
     return dict(id=game.id, started_at=game.started_at, puzzle=puzzle_view(puzzle),
                 memos=memo.cells if memo else None, memo_revision=memo.revision if memo else 0,
                 stars=sorted(stars), mistakes=game.mistakes,
                 lives=max(0, life_limit(puzzle.size)-game.mistakes),
-                completed=clear is not None, score=clear.points if clear else 0,
+                completed=clear is not None, score=clear.points if clear and clear.game_id==game.id else 0,
                 seconds=(clear.seconds if clear else max(0, int((game.finished_at or time.time())-game.started_at))),
                 game_over=game.mistakes >= life_limit(puzzle.size))
 
@@ -301,6 +314,7 @@ def owned_game(session, game_id, player_id):
 
 @app.post('/api/games')
 def start(body: Start, p: Player = Depends(player), session: Session = Depends(db)):
+    p = writable_player(session,p)
     game_id = str(body.request_id)
     existing = session.get(Game, game_id)
     if existing:
@@ -320,7 +334,7 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
         # Player row serializes opening the same shared puzzle on two devices.
         session.execute(update(Player).where(Player.id==p.id).values(name=Player.name))
         existing = session.scalar(select(Game).where(Game.player_id==p.id, Game.puzzle_id==puzzle.id)
-                                  .order_by(Game.started_at.desc()))
+                                  .order_by(select(Clear.id).where(Clear.game_id==Game.id).exists().desc(),Game.started_at.desc()))
         session.execute(update(Game).where(Game.player_id==p.id, Game.puzzle_id.in_(
             select(Puzzle.id).where(Puzzle.difficulty==puzzle.difficulty))).values(active=False))
         if existing:
@@ -396,6 +410,7 @@ class MemoPatch(BaseModel):
 
 @app.post('/api/games/{game_id}/memos')
 def patch_memos(game_id: str, body: MemoPatch, p: Player = Depends(player), session: Session = Depends(db)):
+    p = writable_player(session,p)
     game = owned_game(session, game_id, p.id)
     puzzle = session.get(Puzzle, game.puzzle_id)
     if any(i < 0 or i >= puzzle.size**2 for i in body.changes):
@@ -417,6 +432,7 @@ def patch_memos(game_id: str, body: MemoPatch, p: Player = Depends(player), sess
 
 @app.post('/api/games/{game_id}/stars')
 def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), session: Session = Depends(db)):
+    p = writable_player(session,p)
     game = owned_game(session, game_id, p.id)
     puzzle = session.get(Puzzle, game.puzzle_id)
     if body.row >= puzzle.size or body.col >= puzzle.size:

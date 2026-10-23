@@ -137,8 +137,21 @@ with sync_playwright() as p:
         stable(page,before)
         board=page.locator('#board').bounding_box();button=page.locator('#overlay-next').bounding_box()
         assert board['y']<=button['y'] and button['y']+button['height']<=board['y']+board['height']
+        ended_id=page.request.get(BASE+'/api/games/current').json()['id']
+        marks=page.locator('.cell').all_text_contents()
+        page.locator('#dismiss-result').click()
+        expect(page.locator('#game-over')).to_be_hidden()
+        assert page.request.get(BASE+'/api/games/current').json()['id']==ended_id
+        assert page.locator('.cell').all_text_contents()==marks
+        expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 3回')
+        page.reload()
+        expect(page.locator('#game-over')).to_be_hidden()
+        expect(page.locator('.cell')).to_have_count(36)
+        assert page.request.get(BASE+'/api/games/current').json()['id']==ended_id
+        page.evaluate('window.originalCell = document.querySelector(".cell")')
+        before=geometry(page)
         with page.expect_response(lambda r:r.url.endswith('/api/games') and r.request.method=='POST') as pending:
-            page.locator('#overlay-next').click()
+            page.locator('#next').click()
         next_game=pending.value.json()
         expect(page.locator('#puzzle-label')).to_contain_text(next_game['puzzle']['id'][:8].upper())
         expect(page.locator('#game-over')).to_be_hidden()
