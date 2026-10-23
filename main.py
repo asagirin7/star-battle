@@ -16,7 +16,7 @@ from sqlalchemy import create_engine, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from special_boards import load_boards, palette_for
+from special_boards import load_boards
 from config import database_url
 from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, PlayerMerge, Puzzle
 from authentication import DUMMY_HASH, issue_session, password_hash, password_matches, throttle
@@ -208,13 +208,9 @@ def me(p: Player = Depends(player), session: Session = Depends(db)):
 
 
 def puzzle_view(puzzle):
-    view = dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
+    return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
                 points=clear_points(puzzle.size, 0, puzzle.difficulty), multiplier=multiplier(puzzle.size),
                 initial_lives=life_limit(puzzle.size), scoring='fixed' if puzzle.size == 9 else 'lives', regions=puzzle.regions)
-    palette=palette_for(puzzle)
-    if palette:
-        view['palette']=palette
-    return view
 
 
 def verify_game(session, game):

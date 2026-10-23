@@ -293,7 +293,7 @@ function render() {
     for(let i=0;i<n*n;i++){
       const r=Math.floor(i/n),c=i%n,region=puzzle.regions[r][c];
       const button=document.createElement('button');button.type='button';button.className='cell';button.dataset.index=i;
-      button.style.background=puzzle.palette?.[region]||colors[region];button.append(document.createElement('span'));
+      button.style.background=colors[region];button.append(document.createElement('span'));
       if(r<n-1&&puzzle.regions[r+1][c]!==region)button.style.borderBottom='2px solid #444357';
       if(c<n-1&&puzzle.regions[r][c+1]!==region)button.style.borderRight='2px solid #444357';
       board.append(button);

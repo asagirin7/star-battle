@@ -20,9 +20,6 @@ def load_boards():
             raise ValueError('Invalid or duplicate curated board ID')
         identifiers.add(board['id'])
         certify_generated(dict(board,fingerprint=fingerprint(board['regions'])))
-        palette=board['palette']
-        if len(palette)!=board['size'] or any(not re.fullmatch(r'#[a-fA-F0-9]{6}',c) for c in palette):
-            raise ValueError('Invalid curated palette')
     return boards
 
 
@@ -43,10 +40,3 @@ def install_boards(session):
         session.flush()
         installed.append(board['id'])
     return installed
-
-
-def palette_for(puzzle):
-    for board in load_boards():
-        if puzzle.id==board['id'] and puzzle.regions==board['regions']:
-            return board['palette']
-    return None

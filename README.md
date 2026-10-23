@@ -117,8 +117,8 @@ MIT
 
 `scripts/result_sharing_smoke.py` は共有→クリア→再共有、コピー不可時の操作、不正な結果URLを検証します。クリアによる加点を伴うため、localhost / 127.0.0.1 のローカルサーバー専用です。公開環境では実行できません。
 
-## 青白の .d 特別盤面
+## .d 特別盤面
 
-[特別盤面を遊ぶ](https://star-battlem7kqdh9n.kamui-platform.com/?p=d0d0d0d0d0d04d0da0d0d0d0d0d0d0d0) は青地に白い `.d` が見える9×9盤面です。同じ青や白でも、太い境界線で区切られた領域ごとに星を1つ置きます。通常の9×9と同じ残機1・ノーミス100点です。
+[特別盤面を遊ぶ](https://star-battlem7kqdh9n.kamui-platform.com/?p=d0d0d0d0d0d04d0da0d0d0d0d0d0d0d0) は領域の形で `.d` を表した9×9盤面です。元画像の色には合わせず、通常盤面と同じ9色で各領域を区別します。通常の9×9と同じ残機1・ノーミス100点です。
 
-固定ID・専用配色は `data/special_boards.json` に保存し、009 migrationで一意解・領域連結・非分岐の論理解法を検証して登録します。通常のランダム生成には混ぜません。登録コマンド `python scripts/install_special_boards.py` も同じ内容を二重登録せず、既存の盤面・プレイ履歴は変更しません。
+固定IDと盤面は `data/special_boards.json` に保存し、009 migrationで一意解・領域連結・非分岐の論理解法を検証して登録します。通常のランダム生成には混ぜません。登録コマンド `python scripts/install_special_boards.py` も同じ内容を二重登録せず、既存の盤面・プレイ履歴は変更しません。
