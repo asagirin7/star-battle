@@ -5,6 +5,49 @@ const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT', exper
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
 let celebration=null,expertMode='expert';
+let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
+let memoBase=[],memoTimer=null,memoPromise=null;
+const memoValue=v=>v===2||v===3?v:0;
+function baseKey(){return savedKey()+':synced';}
+function localSave(){
+  try{
+    localStorage.setItem(savedKey(),JSON.stringify(cells.map(memoValue)));
+    if(me?.username)localStorage.setItem(baseKey(),JSON.stringify(memoBase));
+  }catch{}
+}
+function hasMemoChanges(){return cells.some((v,i)=>memoValue(v)!==(memoBase[i]||0));}
+async function flushMemos(){
+  clearTimeout(memoTimer);
+  if(memoPromise){await memoPromise;return flushMemos();}
+  if(!me?.username||!game||!hasMemoChanges())return;
+  const id=game.id,owner=me.id,sent=cells.map(memoValue),changes={};
+  sent.forEach((v,i)=>{if(v!==(memoBase[i]||0))changes[i]=v;});
+  memoPromise=(async()=>{
+    const result=await api('games/'+id+'/memos',{changes});
+    if(game?.id!==id||me?.id!==owner)return;
+    cells=cells.map((v,i)=>v===1||memoValue(v)!==sent[i]?v:result.memos[i]);
+    memoBase=result.memos;game.memo_revision=result.memo_revision;
+    localSave();render();
+  })();
+  try{await memoPromise;}finally{memoPromise=null;}
+}
+function scheduleMemos(){
+  if(!me?.username||!game)return;
+  clearTimeout(memoTimer);
+  memoTimer=setTimeout(()=>flushMemos().catch(()=>status('メモはこの端末に保存しています。通信回復後に同期します。')),350);
+}
+function loadServerMemos(state){
+  if(!me?.username)return;
+  const server=state.memos||Array(cells.length).fill(0);
+  let base=null;
+  try{base=JSON.parse(localStorage.getItem(baseKey()));}catch{}
+  if(Array.isArray(base)&&base.length===cells.length){
+    cells=cells.map((v,i)=>memoValue(v)!==base[i]?v:server[i]);
+  }else if(state.memos){cells=server.slice();}
+  memoBase=server.slice();localSave();
+  if(hasMemoChanges())scheduleMemos();
+}
+
 try{
   autoCross=localStorage.getItem('star-auto-cross')==='true';
   const savedLevel=localStorage.getItem('star-level');if(label[savedLevel])level=savedLevel;
@@ -17,7 +60,7 @@ function requestId() {
   return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
 }
 async function api(path, data) {
-  const response = await fetch('/api/' + path, data === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  const response = await fetch('/api/' + path, data === undefined ? {} : {method:'POST', keepalive:true, headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
   if (!response.ok) {
     let message = '通信に失敗しました。もう一度お試しください。',code;
     try { const error = await response.json(); if (typeof error.detail === 'string') message = error.detail; else if(error.detail?.message){message=error.detail.message;code=error.detail.code;} } catch {}
@@ -68,18 +111,19 @@ $('#finish-celebration').onclick=finishCelebration;
 $('#clear-celebration').addEventListener('cancel',event=>{event.preventDefault();finishCelebration();});
 function openProfile() { $('#name').value = me?.name || ''; $('#profile-dialog').showModal(); }
 $('#profile-button').onclick = openProfile;
+$('#profile-login').onclick=()=>{$('#profile-dialog').close();accountView('login');$('#account-dialog').showModal();};
 $('#close-profile').onclick = () => $('#profile-dialog').close();
 $('#profile-form').onsubmit = async event => {
   event.preventDefault(); const submit = event.submitter; submit.disabled = true;
   try {
     me = await api('profile', {name:$('#name').value}); profileView(); $('#profile-dialog').close();
-    if (!game) await choose();
+    if(sharedId)await startShared();else if (!game) await choose();
   } catch (e) { $('#profile-error').textContent = e.message; }
   finally { submit.disabled = false; }
 };
 function savedKey() { return `star-battle:${me.id}:${game.id}`; }
 function queueKey() { return `star-queue:${me.id}:${game.id}`; }
-function save() { try { localStorage.setItem(savedKey(), JSON.stringify(cells.map(v=>v===2||v===3?v:0))); } catch {} saveQueue(); }
+function save() {localSave();saveQueue();scheduleMemos();}
 function saveQueue() { try {localStorage.setItem(queueKey(),JSON.stringify(moveQueue));} catch {} }
 function waiting(i) {return moveQueue.some(m=>m.row*puzzle.size+m.col===i);}
 function ended() {return !game || game.completed || game.game_over;}
@@ -117,6 +161,10 @@ function commit(prev){
 }
 function applyGame(state, loadMemos=false, draw=true) {
   if(loadMemos)input.reset();
+  if(!loadMemos&&me?.username&&state.memos&&state.memo_revision!==game?.memo_revision){
+    cells=cells.map((v,i)=>v===1||memoValue(v)!==(memoBase[i]||0)?v:state.memos[i]);
+    memoBase=state.memos.slice();
+  }
   game=state;puzzle=state.puzzle;level=puzzle.difficulty;
   try{
     localStorage.setItem('star-level',level);
@@ -125,6 +173,7 @@ function applyGame(state, loadMemos=false, draw=true) {
   if(loadMemos) {
     cells=Array(puzzle.size**2).fill(0);undo=[];moveQueue=[];
     try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length)cells=stored.map(v=>v===2||v===3?v:0);} catch {}
+    loadServerMemos(state);
     try {
       const stored=JSON.parse(localStorage.getItem(queueKey()));
       if(Array.isArray(stored))moveQueue=stored.filter(m=>Number.isInteger(m.row)&&Number.isInteger(m.col)&&m.row>=0&&m.col>=0&&m.row<puzzle.size&&m.col<puzzle.size&&typeof m.request_id==='string');
@@ -160,6 +209,7 @@ async function choose(next=false) {
   busy=true;controls();
   const previousLevel=game?.puzzle.difficulty;
   try {
+    await flushMemos();
     status('新しい星の配置を準備しています…');
     let state=next?null:await api(`games/current?difficulty=${level}`);
     if(!state){
@@ -373,7 +423,137 @@ function updateTimer() {
   text($('#timer'),`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`);
 }
 setInterval(updateTimer,1000);
+async function resumeOrChoose(){
+  if(me?.username&&!game){
+    const state=await api('account/resume');
+    if(state){applyGame(state,true);gameMessage();controls();if(moveQueue.length)pumpMoves();return;}
+  }
+  await choose();
+}
+async function migrateGuestMemos(){
+  // Upgrade notes for every locally played difficulty, preserving the guest's Player ID.
+  const prefix='star-battle:'+me.id+':',saved=[];
+  for(let i=0;i<localStorage.length;i++){
+    const key=localStorage.key(i);
+    if(key?.startsWith(prefix)&&/^[a-f0-9-]{36}$/.test(key.slice(prefix.length))){
+      try{
+        const notes=JSON.parse(localStorage.getItem(key));
+        if(Array.isArray(notes))saved.push([key.slice(prefix.length),notes]);
+      }catch{}
+    }
+  }
+  let complete=true;
+  for(const [id,notes] of saved){
+    const changes={};notes.forEach((v,i)=>{if(v===2||v===3)changes[i]=v;});
+    if(Object.keys(changes).length){
+      try{await api('games/'+id+'/memos',{changes});}catch(e){if(e.status!==404)complete=false;}
+    }
+  }
+  return complete;
+}
+function accountView(mode=accountMode){
+  accountMode=mode;
+  const registered=Boolean(me?.username),login=mode==='login';
+  $('#account-state').textContent=registered?'ログイン中: '+me.username:'今の得点・記録を残したままアカウントにできます。';
+  $('#account-form').hidden=registered;$('#account-manage').hidden=!registered;$('#account-tabs').hidden=registered;
+  $('#password-confirm').hidden=login;$('#password-confirm-label').hidden=login;$('#password-confirm').required=!login;
+  $('#account-password').autocomplete=login?'current-password':'new-password';
+  $('#account-submit').textContent=login?'ログイン':'今の記録でアカウント登録';
+  $('#account-help').textContent=login?'登録したIDで別端末から続けられます。現在のゲスト記録との統合は行いません。':'メール登録は不要です。パスワードを忘れた場合の再発行はできないため、パスワード管理アプリ等に保存してください。';
+  document.querySelectorAll('[data-account-mode]').forEach(b=>b.classList.toggle('selected',b.dataset.accountMode===mode));
+}
+$('#account-button').onclick=()=>{accountView();$('#account-error').textContent='';$('#account-dialog').showModal();};
+$('#close-account').onclick=()=>$('#account-dialog').close();
+document.querySelectorAll('[data-account-mode]').forEach(b=>b.onclick=()=>{accountView(b.dataset.accountMode);$('#account-error').textContent='';});
+$('#account-form').onsubmit=async event=>{
+  event.preventDefault();const button=event.submitter;button.disabled=true;
+  let warning='';
+  try{
+    if(busy||sending||moveQueue.length)throw new Error('盤面の操作が終わってからお試しください。');
+    if(accountMode==='register'&&$('#account-password').value!==$('#password-confirm').value)throw new Error('パスワードが一致しません。');
+    await flushMemos();
+    if(accountMode==='register'&&!me)me=await api('profile',{name:$('#login-id').value.slice(0,24)});
+    const previous=me?.id;
+    me=await api('account/'+accountMode,{username:$('#login-id').value,password:$('#account-password').value});
+    if(accountMode==='register'&&!await migrateGuestMemos())warning='登録しました。一部のメモはこの端末に残っています。元の端末でその盤面を開くと再同期します。';
+    profileView();$('#account-form').reset();$('#account-dialog').close();
+    if(previous===me.id&&game){memoBase=game.memos||Array(cells.length).fill(0);await flushMemos();}
+    else{input.reset();game=null;puzzle=null;cells=[];undo=[];moveQueue=[];memoBase=[];pendingStart=null;}
+    if(sharedId)await startShared();else if(!game)await resumeOrChoose();
+    status(warning||'ログインしました。別端末でも同じIDで続けられます。',true);
+  }catch(e){if(me?.username){profileView();accountView();}$('#account-error').textContent=e.message;}
+  finally{button.disabled=false;}
+};
+$('#password-form').onsubmit=async event=>{
+  event.preventDefault();const button=event.submitter;button.disabled=true;
+  try{
+    await api('account/password',{current_password:$('#old-password').value,new_password:$('#new-password').value});
+    $('#password-form').reset();$('#account-error').textContent='変更しました。他の端末では再ログインしてください。';
+  }catch(e){$('#account-error').textContent=e.message;}finally{button.disabled=false;}
+};
+$('#logout').onclick=async()=>{
+  const button=$('#logout');button.disabled=true;
+  try{
+    if(busy||sending||moveQueue.length)throw new Error('星の送信が終わってからログアウトしてください。');
+    await flushMemos();await api('account/logout',{});location.reload();
+  }catch(e){$('#account-error').textContent=e.message;}finally{button.disabled=false;}
+};
+$('#share-puzzle').onclick=async()=>{
+  if(!puzzle)return;
+  const url=new URL('/',location.origin);url.searchParams.set('p',puzzle.id);
+  $('#share-url').value=url.href;$('#share-status').textContent='';
+  if(navigator.share){
+    try{await navigator.share({title:'Star Battle',text:puzzle.size+' × '+puzzle.size+'の問題に挑戦！',url:url.href});return;}
+    catch(e){if(e.name==='AbortError')return;}
+  }
+  $('#share-dialog').showModal();
+};
+$('#copy-share').onclick=async()=>{
+  try{await navigator.clipboard.writeText($('#share-url').value);$('#share-status').textContent='コピーしました。';}
+  catch{ $('#share-url').focus();$('#share-url').select();$('#share-status').textContent='URLを選択しました。コピーして共有してください。';}
+};
+$('#close-share').onclick=()=>$('#share-dialog').close();
+async function previewShared(){
+  try{
+    if(!/^[a-f0-9]{32}$/.test(sharedId))throw new Error('共有URLが正しくありません。');
+    const shared=await api('puzzles/'+sharedId);
+    $('#shared-description').textContent=shared.size+' × '+shared.size+' / クリア最大 '+shared.points+' pt。同じ問題に挑戦します。以前遊んだ問題なら自分の続きから再開します。';
+    $('#shared-dialog').showModal();
+  }catch(e){sharedId=null;history.replaceState(null,'','/');status(e.message);if(me)await choose();else openProfile();}
+}
+async function startShared(){
+  if(!sharedId)return;
+  if(!me){$('#shared-dialog').close();openProfile();return;}
+  if(busy||sending||moveQueue.length)throw new Error('星の送信が終わってから問題を開いてください。');
+  busy=true;controls();
+  try{
+    await flushMemos();
+    const state=await api('games',{request_id:requestId(),puzzle_id:sharedId});
+    applyGame(state,true);gameMessage();$('#shared-dialog').close();
+    sharedId=null;history.replaceState(null,'','/');
+  }finally{busy=false;controls();}
+}
+$('#play-shared').onclick=()=>startShared().catch(e=>{$('#shared-description').textContent=e.message;});
+$('#close-shared').onclick=()=>{sharedId=null;history.replaceState(null,'','/');$('#shared-dialog').close();if(me)choose();else openProfile();};
+$('#shared-dialog').addEventListener('cancel',()=>{sharedId=null;history.replaceState(null,'','/');if(me)choose();else openProfile();});
+async function refreshAccountGame(){
+  if(!me?.username||!game||document.hidden||busy||sending||moveQueue.length||memoPromise)return;
+  try{
+    await flushMemos();
+    const id=game.id,state=await api('games/'+game.id);
+    if(game.id!==id||busy||sending||moveQueue.length)return;
+    if(state.memo_revision!==game.memo_revision){
+      const server=state.memos||Array(cells.length).fill(0);
+      cells=cells.map((v,i)=>memoValue(v)!==(memoBase[i]||0)?v:server[i]);
+      memoBase=server.slice();
+    }
+    applyGame(state);localSave();me=await api('me');profileView();
+  }catch{}
+}
+setInterval(refreshAccountGame,10000);
+document.addEventListener('visibilitychange',()=>{if(document.hidden){flushMemos().catch(()=>{});}else refreshAccountGame();});
+window.addEventListener('online',()=>{flushMemos().catch(()=>{});});
 (async()=>{
-  try {me=await api('me');profileView();await choose();}
-  catch(e) {if(e.status===401)openProfile();else status(e.message);}
+  try {me=await api('me');profileView();if(sharedId)await previewShared();else await resumeOrChoose();}
+  catch(e) {if(e.status===401){if(sharedId)await previewShared();else openProfile();}else status(e.message);}
 })();

@@ -60,3 +60,31 @@ class Move(Base):
     row: Mapped[int]
     col: Mapped[int]
     correct: Mapped[bool]
+
+
+class Account(Base):
+    __tablename__ = 'accounts'
+    username: Mapped[str] = mapped_column(String(32), primary_key=True)
+    player_id: Mapped[str] = mapped_column(ForeignKey('players.id'), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+
+
+class LoginSession(Base):
+    __tablename__ = 'login_sessions'
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    player_id: Mapped[str] = mapped_column(ForeignKey('players.id'), index=True)
+    expires_at: Mapped[float] = mapped_column(Float)
+
+
+class AuthLimit(Base):
+    __tablename__ = 'auth_limits'
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempts: Mapped[int]
+    window_start: Mapped[float] = mapped_column(Float)
+
+
+class GameMemo(Base):
+    __tablename__ = 'game_memos'
+    game_id: Mapped[str] = mapped_column(ForeignKey('games.id'), primary_key=True)
+    cells: Mapped[list] = mapped_column(JSON)
+    revision: Mapped[int] = mapped_column(default=0)

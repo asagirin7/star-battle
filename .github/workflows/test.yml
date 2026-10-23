@@ -29,6 +29,7 @@ jobs:
           python scripts/browser_smoke.py
           python scripts/daily_ranking_smoke.py
           python scripts/integrity_smoke.py
+          python scripts/account_sharing_smoke.py
           python scripts/interaction_smoke.py
           python scripts/preview_smoke.py
           python scripts/render_smoke.py

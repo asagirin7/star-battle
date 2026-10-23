@@ -12,12 +12,13 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, func, select, update
+from sqlalchemy import create_engine, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import database_url
-from models import Clear, Game, Move, Player, Puzzle
+from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, Puzzle
+from authentication import DUMMY_HASH, issue_session, password_hash, password_matches, throttle
 from puzzle_engine import (
     LEVELS, InvalidPuzzle, certify_generated, checked_solution, clear_points,
     generate, life_limit, multiplier, needs_seed, seed_expert, valid_stars,
@@ -61,7 +62,11 @@ def db():
 
 def player(request: Request, session: Session = Depends(db)):
     token = request.cookies.get('star_player', '')
-    p = session.scalar(select(Player).where(Player.token_hash == hashlib.sha256(token.encode()).hexdigest()))
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    login = session.get(LoginSession, digest)
+    p = session.get(Player, login.player_id) if login and login.expires_at > time.time() else None
+    if not p:
+        p = session.scalar(select(Player).where(Player.token_hash == digest))
     if not p:
         raise HTTPException(401, 'プレイヤーを登録してください。')
     return p
@@ -74,6 +79,7 @@ class Profile(BaseModel):
 class Start(BaseModel):
     difficulty: Literal['easy', 'medium', 'hard', 'expert', 'expert_relaxed'] = 'easy'
     request_id: uuid.UUID
+    puzzle_id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
 
 
 class StarAttempt(BaseModel):
@@ -84,7 +90,9 @@ class StarAttempt(BaseModel):
 
 def stats(session, p):
     points, count = session.execute(select(func.coalesce(func.sum(Clear.points), 0), func.count(Clear.id)).where(Clear.player_id == p.id)).one()
-    return dict(id=p.id, name=p.name, points=points, clears=count)
+    account = session.scalar(select(Account).where(Account.player_id == p.id))
+    return dict(id=p.id, name=p.name, points=points, clears=count,
+                username=account.username if account else None)
 
 
 @app.get('/')
@@ -114,6 +122,70 @@ def profile(body: Profile, request: Request, response: Response, session: Sessio
                             secure=os.getenv('COOKIE_SECURE', 'false').lower() == 'true', samesite='strict')
     session.commit()
     return stats(session, p)
+
+
+class Credentials(BaseModel):
+    username: str = Field(pattern=r'^[A-Za-z0-9_]{3,32}$')
+    password: str = Field(min_length=10, max_length=128)
+
+
+@app.post('/api/account/register')
+def register_account(body: Credentials, request: Request, response: Response,
+                     p: Player = Depends(player), session: Session = Depends(db)):
+    throttle(session, 'register', request.client.host if request.client else 'unknown', 10)
+    if session.scalar(select(Account).where(Account.player_id==p.id)):
+        raise HTTPException(409, 'このプレイヤーは登録済みです。')
+    session.add(Account(username=body.username.lower(), player_id=p.id, password_hash=password_hash(body.password)))
+    # Retire the guest bearer token when upgrading to an account.
+    p.token_hash = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+    try:
+        issue_session(session, response, p.id)
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(409, 'このログインIDは使用されています。')
+    return stats(session, p)
+
+
+@app.post('/api/account/login')
+def login_account(body: Credentials, request: Request, response: Response, session: Session = Depends(db)):
+    throttle(session, 'login-ip', request.client.host if request.client else 'unknown', 100)
+    throttle(session, 'login-id', body.username.lower(), 10)
+    account = session.scalar(select(Account).where(Account.username==body.username.lower()).with_for_update())
+    matches = password_matches(body.password, account.password_hash if account else DUMMY_HASH)
+    if not account or not matches:
+        raise HTTPException(401, 'ログインIDまたはパスワードが違います。')
+    issue_session(session, response, account.player_id)
+    session.commit()
+    return stats(session, session.get(Player, account.player_id))
+
+
+@app.post('/api/account/logout')
+def logout_account(request: Request, response: Response, session: Session = Depends(db)):
+    digest = hashlib.sha256(request.cookies.get('star_player','').encode()).hexdigest()
+    session.execute(delete(LoginSession).where(LoginSession.token_hash==digest))
+    session.commit()
+    response.delete_cookie('star_player', path='/', httponly=True, samesite='strict',
+                           secure=os.getenv('COOKIE_SECURE','false').lower()=='true')
+    return {'ok': True}
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=10, max_length=128)
+    new_password: str = Field(min_length=10, max_length=128)
+
+
+@app.post('/api/account/password')
+def change_password(body: PasswordChange, response: Response, p: Player = Depends(player), session: Session = Depends(db)):
+    throttle(session, 'password-change', p.id, 10)
+    account = session.scalar(select(Account).where(Account.player_id==p.id).with_for_update())
+    if not account or not password_matches(body.current_password, account.password_hash):
+        raise HTTPException(401, '現在のパスワードが違います。')
+    account.password_hash = password_hash(body.new_password)
+    session.execute(delete(LoginSession).where(LoginSession.player_id==p.id))
+    issue_session(session, response, p.id)
+    session.commit()
+    return {'ok': True}
 
 
 @app.get('/api/me')
@@ -163,7 +235,9 @@ def game_view(session, game):
     puzzle,moves = verify_game(session,game)
     stars = {(m.row,m.col) for m in moves if m.correct}
     clear = session.scalar(select(Clear).where(Clear.game_id == game.id))
+    memo = session.get(GameMemo, game.id)
     return dict(id=game.id, started_at=game.started_at, puzzle=puzzle_view(puzzle),
+                memos=memo.cells if memo else None, memo_revision=memo.revision if memo else 0,
                 stars=sorted(stars), mistakes=game.mistakes,
                 lives=max(0, life_limit(puzzle.size)-game.mistakes),
                 completed=clear is not None, score=clear.points if clear else 0,
@@ -184,6 +258,24 @@ def current(difficulty: Literal['easy', 'medium', 'hard', 'expert', 'expert_rela
         result = game_view(session,game)
     except HTTPException as error:
         if not isinstance(error.detail,dict) or error.detail.get('code') != 'invalid_puzzle':
+            raise
+        game.active = False
+        session.commit()
+        return None
+    session.commit()
+    return result
+
+
+@app.get('/api/account/resume')
+def resume_account(p: Player = Depends(player), session: Session = Depends(db)):
+    game = session.scalar(select(Game).where(Game.player_id==p.id, Game.active.is_(True))
+                          .order_by(Game.started_at.desc()))
+    if not game:
+        return None
+    try:
+        result = game_view(session, game)
+    except HTTPException as error:
+        if not isinstance(error.detail, dict) or error.detail.get('code')!='invalid_puzzle':
             raise
         game.active = False
         session.commit()
@@ -217,6 +309,36 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
         result = game_view(session,existing)
         session.commit()
         return result
+    if body.puzzle_id:
+        puzzle = session.get(Puzzle, body.puzzle_id)
+        if not puzzle:
+            raise HTTPException(404, '共有された問題が見つかりません。')
+        try:
+            checked_solution(puzzle.regions)
+        except InvalidPuzzle:
+            raise HTTPException(404, 'この問題は現在共有できません。')
+        # Player row serializes opening the same shared puzzle on two devices.
+        session.execute(update(Player).where(Player.id==p.id).values(name=Player.name))
+        existing = session.scalar(select(Game).where(Game.player_id==p.id, Game.puzzle_id==puzzle.id)
+                                  .order_by(Game.started_at.desc()))
+        session.execute(update(Game).where(Game.player_id==p.id, Game.puzzle_id.in_(
+            select(Puzzle.id).where(Puzzle.difficulty==puzzle.difficulty))).values(active=False))
+        if existing:
+            existing.active = True
+            result = game_view(session, existing)
+            session.commit()
+            return result
+        game = Game(id=game_id, player_id=p.id, puzzle_id=puzzle.id)
+        session.add(game)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            existing = session.get(Game, game_id)
+            if existing and existing.player_id==p.id:
+                return game_view(session,existing)
+            raise HTTPException(409, 'もう一度問題を開いてください。')
+        return game_view(session, game)
     if body.difficulty in {'expert','expert_relaxed'} and needs_seed(body.difficulty):
         stored = session.scalars(select(Puzzle).where(Puzzle.difficulty == body.difficulty)
                                  .order_by(func.random()).limit(12))
@@ -254,6 +376,43 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
             return game_view(session, existing)
         raise HTTPException(409, 'もう一度、新しい問題を作成してください。')
     return game_view(session, game)
+
+
+@app.get('/api/puzzles/{puzzle_id}')
+def shared_puzzle(puzzle_id: str, session: Session = Depends(db)):
+    puzzle = session.get(Puzzle, puzzle_id)
+    if not puzzle:
+        raise HTTPException(404, '共有された問題が見つかりません。')
+    try:
+        checked_solution(puzzle.regions)
+    except InvalidPuzzle:
+        raise HTTPException(404, 'この問題は現在共有できません。')
+    return puzzle_view(puzzle)
+
+
+class MemoPatch(BaseModel):
+    changes: dict[int, Literal[0, 2, 3]] = Field(max_length=81)
+
+
+@app.post('/api/games/{game_id}/memos')
+def patch_memos(game_id: str, body: MemoPatch, p: Player = Depends(player), session: Session = Depends(db)):
+    game = owned_game(session, game_id, p.id)
+    puzzle = session.get(Puzzle, game.puzzle_id)
+    if any(i < 0 or i >= puzzle.size**2 for i in body.changes):
+        raise HTTPException(422, '盤面の範囲外です。')
+    # Merge cell edits under the same lock as stars; other-device edits survive.
+    session.execute(update(Game).where(Game.id==game.id).values(move_revision=Game.move_revision+1))
+    memo = session.get(GameMemo, game.id, populate_existing=True)
+    if not memo:
+        memo = GameMemo(game_id=game.id, cells=[0]*(puzzle.size**2), revision=0)
+        session.add(memo)
+    values = memo.cells[:]
+    for i,value in body.changes.items():
+        values[i] = value
+    memo.cells = values
+    memo.revision += 1
+    session.commit()
+    return {'memos': memo.cells, 'memo_revision': memo.revision}
 
 
 @app.post('/api/games/{game_id}/stars')

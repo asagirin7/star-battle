@@ -38,3 +38,5 @@
 .ranking-period{display:flex;gap:8px;margin:24px 0 12px}.ranking-period button{flex:1;max-width:160px}.ranking-period .selected{color:var(--gold);border-color:var(--gold);background:#f6d58b12}#ranking-description{font-size:12px;line-height:1.8}
 
 .cell .flag{font-size:.8em;color:#312444}
+
+header{gap:8px}.brand{margin-right:auto}#account-button{font-size:12px}.account-tabs{display:flex;gap:8px;margin:16px 0}.account-tabs button{flex:1;font-size:12px}.account-tabs .selected{border-color:var(--gold);color:var(--gold)}#account-dialog,#share-dialog,#shared-dialog{max-height:90dvh;overflow:auto}#account-dialog label{display:block}#account-help,#account-state,#account-error,#share-status{font-size:12px;line-height:1.8}#account-manage>button{margin-top:20px}#close-account,#close-share,#close-shared{margin-top:16px}#share-url{font-size:12px}#share-puzzle{color:var(--gold)}@media(max-width:740px){header{flex-wrap:wrap;height:auto;min-height:72px;padding-top:12px;padding-bottom:12px}.profile{max-width:120px}#account-button{font-size:10px;padding:8px}.tools{flex-wrap:wrap}}
