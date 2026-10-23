@@ -18,6 +18,7 @@ def test_launch_grants_jst_once_and_skips_unopened_days(client,monkeypatch):
     assert register(client)['hints']==10
     for _ in range(3):assert client.get('/api/me').json()['hints']==10
     day[0]=101
+    assert client.get('/api/me?launch=false').json()['hints']==10
     assert client.get('/api/me').json()['hints']==13
     assert client.get('/api/me').json()['hints']==13
     day[0]=110

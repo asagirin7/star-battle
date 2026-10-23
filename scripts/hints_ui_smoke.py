@@ -22,16 +22,19 @@ with sync_playwright() as p:
     for width in [320, 390, 1280]:
         context = browser.new_context(viewport=dict(width=width, height=900))
         page = context.new_page()
-        errors, attempts, held = [], [], []
+        errors, attempts, held, me_requests = [], [], [], []
         state = dict(mode='hold', balance=10)
         page.on('pageerror', lambda error: errors.append(str(error)))
 
         def api(route):
             path = route.request.url.split('/api/')[1]
-            if path == 'me':
-                route.fulfill(json={**PLAYER, 'hints': state['balance']})
-            elif path.startswith('games/current'):
+            if path.split('?')[0] == 'me':
+                me_requests.append(path)
+                route.fulfill(json={**PLAYER, 'hints': state['balance'], 'username': 'ui' if state.get('registered') else None})
+            elif path.startswith('games/current') or path == 'games/'+GAME['id']:
                 route.fulfill(json=GAME)
+            elif path.endswith('/memos'):
+                route.fulfill(json=dict(memos=[0]*36, memo_revision=1))
             elif path == 'hints':
                 attempts.append(route.request.post_data_json)
                 if state['mode'] == 'hold':
@@ -48,6 +51,7 @@ with sync_playwright() as p:
                 raise AssertionError(f'Unexpected API write: {path}')
 
         page.route('**/api/**', api)
+        page.clock.install()
         page.goto(BASE_URL)
         expect(page.locator('.cell')).to_have_count(36)
         expect(page.locator('#next')).to_have_count(0)
@@ -93,6 +97,22 @@ with sync_playwright() as p:
         page.locator('#hint').click()
         expect(page.locator('#hint-balance')).to_have_text('残り 0 回')
         expect(page.locator('#hint')).to_be_disabled()
+        # A periodic account sync reads stats without granting a launch bonus.
+        state['registered'] = True
+        page.evaluate("me.username='ui'")
+        launch_count = me_requests.count('me')
+        with page.expect_request('**/api/me?launch=false'):
+            page.clock.fast_forward(10000)
+        assert me_requests.count('me') == launch_count
+        # Returning to a visible page is a launch, including for guest players.
+        state['registered'] = False
+        page.evaluate('me.username=null')
+        state['balance'] = 3
+        with page.expect_request('**/api/me'):
+            page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+        expect(page.locator('#hint-balance')).to_have_text('残り 3 回')
+        expect(page.locator('#hint')).to_be_enabled()
+        assert me_requests.count('me') == launch_count+1
         assert not errors, errors
         Path('artifacts').mkdir(exist_ok=True)
         page.screenshot(path=f'artifacts/hints-ui-{width}.png', full_page=True)

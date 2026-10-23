@@ -7,6 +7,7 @@ let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
 let celebration=null,expertMode='expert';
 let hintLoading=false,hintAttempt=null,hintDisplay=null,hintMessageContext=null;
+let launchPending=false,launchRefreshing=false,accountRefreshing=false;
 let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
 let memoBase=[],memoTimer=null,memoPromise=null;
 let sharedClearId=new URLSearchParams(location.search).get('c'),shareMessage='';
@@ -150,7 +151,7 @@ function save() {localSave();saveQueue();scheduleMemos();}
 function saveQueue() { try {localStorage.setItem(queueKey(),JSON.stringify(moveQueue));} catch {} }
 function waiting(i) {return moveQueue.some(m=>m.row*puzzle.size+m.col===i);}
 function ended() {return !game || game.completed || game.game_over;}
-function mutable(i) {return !hintLoading && !busy && !ended() && cells[i]!==1 && !waiting(i);}
+function mutable(i) {return !hintLoading && !launchRefreshing && !busy && !ended() && cells[i]!==1 && !waiting(i);}
 function memoSnapshot(){
   const snapshot=cells.slice();
   snapshot.suppressed=Object.fromEntries(moveQueue.map(m=>[m.request_id,[...(m.suppressed||[])]]));
@@ -228,7 +229,7 @@ function hintView(){
   text($('#hint'),hintLoading?'ヒントを確認中…':'ヒントを見る');
 }
 $('#hint').onclick=async()=>{
-  if(hintLoading||busy||sending||moveQueue.length||ended()||!(me?.hints>0))return;
+  if(hintLoading||launchRefreshing||busy||sending||moveQueue.length||ended()||!(me?.hints>0))return;
   input.reset();
   const context=hintContext(),owner=me.id,id=game.id;
   if(hintAttempt?.context!==context){
@@ -253,7 +254,7 @@ $('#hint').onclick=async()=>{
     // Retry a failed connection with the same ID, including after reload.
     if(e.status&&e.status<500){hintAttempt=null;try{sessionStorage.removeItem('star-hint:'+owner+':'+id);}catch{}}
     if(e.status===409){
-      try{const fresh=await api('me');if(me?.id===owner){me=fresh;profileView();}}catch{}
+      try{const fresh=await api('me?launch=false');if(me?.id===owner){me=fresh;profileView();}}catch{}
     }
   }finally{hintLoading=false;render();}
 };
@@ -268,17 +269,17 @@ function gameMessage() {
   else status((puzzle.scoring==='fixed'?`9×9は1ミスで終了、クリアで${puzzle.points} pt。`:'')+'1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
 function controls() {
-  const changing=busy||hintLoading||sending||moveQueue.length>0;
+  const changing=busy||hintLoading||launchRefreshing||sending||moveQueue.length>0;
   for(const selector of ['#retry-board','#overlay-retry','#advance','#overlay-next','#expert-mode', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
-  disabled($('#undo'),busy||hintLoading||ended()||!undo.length);
-  disabled($('#reset'),busy||hintLoading||ended());
+  disabled($('#undo'),busy||hintLoading||launchRefreshing||ended()||!undo.length);
+  disabled($('#reset'),busy||hintLoading||launchRefreshing||ended());
   disabled($('#hint'),changing||ended()||!me||!(me.hints>0));
   disabled($('#auto-cross'),hintLoading);
   $('#retry-moves').hidden=!moveQueue.length||sending;
 }
 async function choose(next=false) {
   if(!me){openProfile();return;}
-  if(busy||hintLoading||sending||moveQueue.length)return;
+  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)return;
   busy=true;controls();
   const previousLevel=game?.puzzle.difficulty;
   try {
@@ -405,7 +406,7 @@ async function pumpMoves() {
   }
 }
 const input=attachBoardInput($('#board'),{
-  blocked:()=>busy||hintLoading||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
+  blocked:()=>busy||hintLoading||launchRefreshing||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
   snapshot:memoSnapshot,paint:paintMemo,
   flag:i=>{const prev=memoSnapshot();paintMemo(i,cells[i]===3?0:3);commit(prev);},
   render:()=>render(),commit,
@@ -425,10 +426,10 @@ const input=attachBoardInput($('#board'),{
 $('#retry-moves').onclick=pumpMoves;
 window.addEventListener('online',pumpMoves);
 document.querySelectorAll('[data-level]').forEach(button=>button.onclick=async()=>{
-  if(busy||hintLoading||sending||moveQueue.length)return;level=button.dataset.level==='expert'?expertMode:button.dataset.level;await choose();
+  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)return;level=button.dataset.level==='expert'?expertMode:button.dataset.level;await choose();
 });
 $('#expert-mode').onclick=async()=>{
-  if(busy||hintLoading||sending||moveQueue.length)return;
+  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)return;
   level=level==='expert_relaxed'?'expert':'expert_relaxed';await choose();
 };
 $('#dismiss-result').onclick=()=>{
@@ -439,7 +440,7 @@ $('#dismiss-result').onclick=()=>{
   $('#advance').focus({preventScroll:true});
 };
 async function retryBoard(){
-  if(busy||hintLoading||sending||moveQueue.length||!game?.game_over)return;
+  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length||!game?.game_over)return;
   busy=true;controls();
   try{
     await flushMemos();
@@ -450,7 +451,7 @@ async function retryBoard(){
 $('#retry-board').onclick=retryBoard;$('#overlay-retry').onclick=retryBoard;
 $('#advance').onclick=()=>choose(true);$('#overlay-next').onclick=()=>choose(true);
 function undoMemo(){
-  if(busy||hintLoading||!undo.length||ended())return;
+  if(busy||hintLoading||launchRefreshing||!undo.length||ended())return;
   input.reset();restoreMemos(undo.pop());save();render();
 }
 $('#undo').onclick=undoMemo;
@@ -458,7 +459,7 @@ document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.target.closest('input,textarea,[contenteditable]')){event.preventDefault();undoMemo();}
 });
 $('#reset').onclick=()=>{
-  if(busy||hintLoading||ended())return;
+  if(busy||hintLoading||launchRefreshing||ended())return;
   input.reset();const prev=memoSnapshot();for(let i=0;i<cells.length;i++)paintMemo(i,0);commit(prev);status('メモを消しました。残機と確定した星はそのままです。');
 };
 $('#auto-cross').onclick=()=>{
@@ -568,7 +569,7 @@ $('#account-form').onsubmit=async event=>{
   event.preventDefault();const button=event.submitter;button.disabled=true;
   let warning='';
   try{
-    if(busy||hintLoading||sending||moveQueue.length)throw new Error('盤面の操作が終わってからお試しください。');
+    if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)throw new Error('盤面の操作が終わってからお試しください。');
     if(accountMode==='register'&&$('#account-password').value!==$('#password-confirm').value)throw new Error('パスワードが一致しません。');
     await flushMemos();
     if(accountMode==='register'&&!me)me=await api('profile',{name:$('#login-id').value.slice(0,24)});
@@ -594,7 +595,7 @@ $('#password-form').onsubmit=async event=>{
 $('#logout').onclick=async()=>{
   const button=$('#logout');button.disabled=true;
   try{
-    if(busy||hintLoading||sending||moveQueue.length)throw new Error('星の送信が終わってからログアウトしてください。');
+    if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)throw new Error('星の送信が終わってからログアウトしてください。');
     await flushMemos();await api('account/logout',{});location.reload();
   }catch(e){$('#account-error').textContent=e.message;}finally{button.disabled=false;}
 };
@@ -680,7 +681,7 @@ async function previewShared(){
 async function startShared(){
   if(!sharedId)return;
   if(!me){$('#shared-dialog').close();openProfile();return;}
-  if(busy||hintLoading||sending||moveQueue.length)throw new Error('星の送信が終わってから盤面を開いてください。');
+  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)throw new Error('星の送信が終わってから盤面を開いてください。');
   busy=true;controls();
   try{
     await flushMemos();
@@ -693,21 +694,36 @@ $('#play-shared').onclick=()=>startShared().catch(e=>{$('#shared-description').t
 $('#close-shared').onclick=()=>{sharedId=null;sharedClearId=null;history.replaceState(null,'','/');$('#shared-dialog').close();if(me)choose();else openProfile();};
 $('#shared-dialog').addEventListener('cancel',()=>{sharedId=null;sharedClearId=null;history.replaceState(null,'','/');if(me)choose();else openProfile();});
 async function refreshAccountGame(){
-  if(!me?.username||!game||document.hidden||busy||hintLoading||sending||moveQueue.length||memoPromise)return;
+  if(accountRefreshing||!me?.username||!game||document.hidden||busy||hintLoading||launchRefreshing||sending||moveQueue.length||memoPromise)return;
+  accountRefreshing=true;
   try{
     await flushMemos();
     const id=game.id,state=await api('games/'+game.id);
-    if(game.id!==id||busy||hintLoading||sending||moveQueue.length)return;
+    if(game.id!==id||busy||hintLoading||launchRefreshing||sending||moveQueue.length)return;
     if(state.memo_revision!==game.memo_revision){
       const server=state.memos||Array(cells.length).fill(0);
       cells=cells.map((v,i)=>memoValue(v)!==(memoBase[i]||0)?v:server[i]);
       memoBase=server.slice();
     }
-    applyGame(state);localSave();me=await api('me');profileView();
-  }catch{}
+    applyGame(state);localSave();me=await api('me?launch=false');profileView();controls();
+  }catch{}finally{accountRefreshing=false;}
 }
-setInterval(refreshAccountGame,10000);
-document.addEventListener('visibilitychange',()=>{if(document.hidden){flushMemos().catch(()=>{});}else refreshAccountGame();});
+async function refreshLaunch(){
+  if(!launchPending||launchRefreshing||accountRefreshing||document.hidden||!me||busy||hintLoading||sending||moveQueue.length||memoPromise)return;
+  launchPending=false;launchRefreshing=true;controls();
+  const owner=me.id;
+  try{
+    const fresh=await api('me');
+    if(me?.id===owner){me=fresh;profileView();}
+  }catch{launchPending=true;}
+  finally{launchRefreshing=false;controls();}
+  await refreshAccountGame();
+}
+setInterval(()=>{if(launchPending)refreshLaunch();else refreshAccountGame();},10000);
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){flushMemos().catch(()=>{});}
+  else{launchPending=true;refreshLaunch();}
+});
 window.addEventListener('online',()=>{flushMemos().catch(()=>{});});
 (async()=>{
   try {me=await api('me');importMergedNotes();profileView();if(sharedId)await previewShared();else await resumeOrChoose();}

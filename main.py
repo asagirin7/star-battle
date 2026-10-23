@@ -216,8 +216,8 @@ def change_password(body: PasswordChange, response: Response, p: Player = Depend
 
 
 @app.get('/api/me')
-def me(p: Player = Depends(player), session: Session = Depends(db)):
-    return launch_stats(session, p)
+def me(launch: bool = True, p: Player = Depends(player), session: Session = Depends(db)):
+    return launch_stats(session, p) if launch else stats(session,p)
 
 
 def puzzle_view(puzzle):
