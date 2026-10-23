@@ -25,7 +25,7 @@ def test_legacy_history_migrates_to_three_lives(tmp_path):
         assert db.execute('SELECT name FROM players').fetchone()[0]=='以前のプレイヤー'
         assert db.execute('SELECT points,mistakes FROM clears').fetchall()==[(3,0),(6,0),(9,0)]
         assert db.execute('SELECT mistakes FROM games').fetchall()==[(0,)]*3
-        assert db.execute('SELECT count(*) FROM puzzles').fetchone()[0]==0
+        assert db.execute('SELECT id FROM puzzles').fetchall()==[('d0d0d0d0d0d04d0da0d0d0d0d0d0d0d0',)]
     alembic('upgrade','head')
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT sum(points) FROM clears').fetchone()[0]==18
@@ -47,7 +47,7 @@ def test_current_history_reweights_once_and_preserves_mistakes(tmp_path):
         alembic('upgrade','head')
         with sqlite3.connect(path) as db:
             assert db.execute('SELECT points,mistakes FROM clears ORDER BY id').fetchall()==[(3,0),(4,1),(3,2)]
-            assert db.execute('SELECT points FROM puzzles ORDER BY id').fetchall()==[(3,),(6,),(9,)]
+            assert db.execute("SELECT points FROM puzzles WHERE id LIKE 'p%' ORDER BY id").fetchall()==[(3,),(6,),(9,)]
     alembic('downgrade','002')
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(3,),(2,),(1,)]
@@ -70,7 +70,7 @@ def test_expert_history_changes_to_fixed_100_once(tmp_path):
         alembic('upgrade','head')
         with sqlite3.connect(path) as db:
             assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(100,),(0,),(9,)]
-            assert db.execute('SELECT points FROM puzzles ORDER BY id').fetchall()==[(100,),(100,),(9,)]
+            assert db.execute("SELECT points FROM puzzles WHERE id LIKE 'p%' ORDER BY id").fetchall()==[(100,),(100,),(9,)]
     alembic('downgrade','003')
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(30,),(0,),(9,)]
@@ -93,7 +93,7 @@ def test_relaxed_history_changes_to_50_without_affecting_other_modes(tmp_path):
         alembic('upgrade','head')
         with sqlite3.connect(path) as db:
             assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(50,),(0,),(100,),(9,)]
-            assert db.execute('SELECT points FROM puzzles ORDER BY id').fetchall()==[(50,),(50,),(100,),(9,)]
+            assert db.execute("SELECT points FROM puzzles WHERE id LIKE 'p%' ORDER BY id").fetchall()==[(50,),(50,),(100,),(9,)]
     alembic('downgrade','004')
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(100,),(0,),(100,),(9,)]

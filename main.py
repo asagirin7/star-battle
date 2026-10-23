@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from special_boards import load_boards, palette_for
 from config import database_url
 from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, PlayerMerge, Puzzle
 from authentication import DUMMY_HASH, issue_session, password_hash, password_matches, throttle
@@ -207,9 +208,13 @@ def me(p: Player = Depends(player), session: Session = Depends(db)):
 
 
 def puzzle_view(puzzle):
-    return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
+    view = dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
                 points=clear_points(puzzle.size, 0, puzzle.difficulty), multiplier=multiplier(puzzle.size),
                 initial_lives=life_limit(puzzle.size), scoring='fixed' if puzzle.size == 9 else 'lives', regions=puzzle.regions)
+    palette=palette_for(puzzle)
+    if palette:
+        view['palette']=palette
+    return view
 
 
 def verify_game(session, game):
@@ -254,6 +259,7 @@ def game_view(session, game):
                 stars=sorted(stars), mistakes=game.mistakes,
                 lives=max(0, life_limit(puzzle.size)-game.mistakes),
                 completed=clear is not None, score=clear.points if clear and clear.game_id==game.id else 0,
+                clear_id=clear.id if clear else None,
                 seconds=(clear.seconds if clear else max(0, int((game.finished_at or time.time())-game.started_at))),
                 game_over=game.mistakes >= life_limit(puzzle.size))
 
@@ -354,7 +360,8 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
             raise HTTPException(409, 'もう一度盤面を開いてください。')
         return game_view(session, game)
     if body.difficulty in {'expert','expert_relaxed'} and needs_seed(body.difficulty):
-        stored = session.scalars(select(Puzzle).where(Puzzle.difficulty == body.difficulty)
+        stored = session.scalars(select(Puzzle).where(Puzzle.difficulty == body.difficulty,
+                                 Puzzle.id.not_in([board['id'] for board in load_boards()]))
                                  .order_by(func.random()).limit(12))
         for item in stored:
             seed_expert(dict(size=item.size, difficulty=item.difficulty, regions=item.regions, solution=item.solution))
@@ -402,6 +409,26 @@ def shared_puzzle(puzzle_id: str, session: Session = Depends(db)):
     except InvalidPuzzle:
         raise HTTPException(404, 'この盤面は現在共有できません。')
     return puzzle_view(puzzle)
+
+
+@app.get('/api/clears/{clear_id}')
+def shared_clear(clear_id: str, session: Session = Depends(db)):
+    try:
+        if str(uuid.UUID(clear_id)) != clear_id:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(404, '共有されたクリア結果が見つかりません。')
+    clear=session.get(Clear,clear_id)
+    puzzle=session.get(Puzzle,clear.puzzle_id) if clear else None
+    owner=session.get(Player,clear.player_id) if clear else None
+    if not clear or not puzzle or not owner:
+        raise HTTPException(404, '共有されたクリア結果が見つかりません。')
+    try:
+        checked_solution(puzzle.regions)
+    except InvalidPuzzle:
+        raise HTTPException(404, 'このクリア結果は現在共有できません。')
+    return dict(id=clear.id,name=owner.name,seconds=clear.seconds,points=clear.points,
+                cleared_at=clear.cleared_at,puzzle=puzzle_view(puzzle))
 
 
 class MemoPatch(BaseModel):

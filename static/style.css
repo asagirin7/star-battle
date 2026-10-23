@@ -44,3 +44,7 @@ header{gap:8px}.brand{margin-right:auto}#account-button{font-size:12px}.account-
 #dismiss-result{display:block;margin:12px auto 0;min-width:170px;font-size:13px}
 
 #share-url{width:100%;user-select:text;-webkit-user-select:text}#share-link{display:block;overflow-wrap:anywhere;text-decoration:underline;color:var(--gold);font-size:12px;line-height:1.8;margin:12px 0;user-select:text;-webkit-user-select:text}.share-actions{display:flex;flex-wrap:wrap;gap:8px}
+
+#result-share-text{width:100%;min-height:100px;resize:vertical;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:12px;user-select:text;-webkit-user-select:text;font:inherit;font-size:13px}#shared-result{color:var(--gold);overflow-wrap:anywhere}
+
+#overlay-share{display:block;margin:12px auto 0;font-size:13px}

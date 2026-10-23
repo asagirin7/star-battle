@@ -7,6 +7,7 @@ let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new
 let celebration=null,expertMode='expert';
 let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
 let memoBase=[],memoTimer=null,memoPromise=null;
+let sharedClearId=new URLSearchParams(location.search).get('c'),shareMessage='';
 const dismissedResults=new Set();
 const memoValue=v=>v===2||v===3?v:0;
 function baseKey(){return savedKey()+':synced';}
@@ -271,10 +272,12 @@ function render() {
   if(hearts.children.length!==maxLives)hearts.replaceChildren(...Array.from({length:maxLives},()=>Object.assign(document.createElement('span'),{textContent:'♥'})));
   [...hearts.children].forEach((heart,i)=>heart.classList.toggle('lost',i>=game.lives));
   attribute(hearts,'aria-label',`残機 ${game.lives}、ミス ${game.mistakes}回`);
+  text($('#share-puzzle'),game.completed?'クリア結果を共有':'盤面を共有');
   text($('#advance'),game.completed?'次の盤面に挑戦 →':game.game_over?'新しい盤面で再挑戦 →':'新しい盤面に挑戦 →');
   const result=$('#game-over');
   result.hidden=!(game.completed||game.game_over)||dismissedResults.has(game.id);
   $('#dismiss-result').hidden=!game.game_over;
+  $('#overlay-share').hidden=!game.completed;
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
   text($('#result-message'),game.completed?rewardMessage():'次の盤面で、もう一度。');
@@ -290,7 +293,7 @@ function render() {
     for(let i=0;i<n*n;i++){
       const r=Math.floor(i/n),c=i%n,region=puzzle.regions[r][c];
       const button=document.createElement('button');button.type='button';button.className='cell';button.dataset.index=i;
-      button.style.background=colors[region];button.append(document.createElement('span'));
+      button.style.background=puzzle.palette?.[region]||colors[region];button.append(document.createElement('span'));
       if(r<n-1&&puzzle.regions[r+1][c]!==region)button.style.borderBottom='2px solid #444357';
       if(c<n-1&&puzzle.regions[r][c+1]!==region)button.style.borderRight='2px solid #444357';
       board.append(button);
@@ -527,32 +530,63 @@ $('#logout').onclick=async()=>{
     await flushMemos();await api('account/logout',{});location.reload();
   }catch(e){$('#account-error').textContent=e.message;}finally{button.disabled=false;}
 };
-$('#share-puzzle').onclick=()=>{
+$('#share-puzzle').onclick=async()=>{
   if(!puzzle)return;
-  const url=new URL('/',location.origin);url.searchParams.set('p',puzzle.id);
+  const current=game.id,url=new URL('/',location.origin);url.searchParams.set('p',puzzle.id);
+  if(game.completed&&game.clear_id)url.searchParams.set('c',game.clear_id);
+  shareMessage=puzzle.size+' × '+puzzle.size+'の盤面に挑戦！';
+  $('#share-title').textContent='この盤面をシェア';$('#result-share-text').hidden=true;$('#copy-result').hidden=true;
   $('#share-url').value=url.href;$('#share-link').href=url.href;$('#share-link').textContent=url.href;
   $('#share-status').textContent='リンクをコピーするか、URLを長押しして共有できます。';
   $('#native-share').hidden=typeof navigator.share!=='function';
+  $('#native-share').disabled=Boolean(game.completed);
   $('#share-dialog').showModal();
+  if(game.completed){
+    $('#share-status').textContent='公式のクリア結果を確認しています…';
+    try{
+      if(!game.clear_id)throw new Error('クリア結果を取得できませんでした。');
+      const verifiedClear=await api('clears/'+game.clear_id);
+      if(game.id!==current||!$('#share-dialog').open)return;
+      if(verifiedClear.puzzle.id!==puzzle.id)throw new Error('クリア結果と盤面が一致しません。');
+      url.searchParams.set('c',verifiedClear.id);
+      shareMessage=`Star Battle ${verifiedClear.puzzle.size}×${verifiedClear.puzzle.size}を${verifiedClear.seconds}秒でクリア！ ${verifiedClear.points}pt`;
+      $('#share-title').textContent='クリア結果をシェア';
+      $('#share-url').value=url.href;$('#share-link').href=url.href;$('#share-link').textContent=url.href;
+      $('#result-share-text').value=shareMessage+'\n'+url.href;$('#result-share-text').hidden=false;$('#copy-result').hidden=false;
+      $('#share-status').textContent='公式のクリア秒数付きで共有できます。';
+      $('#native-share').disabled=false;
+    }catch(e){
+      if(game.id===current){
+        url.searchParams.delete('c');
+        $('#share-url').value=url.href;$('#share-link').href=url.href;$('#share-link').textContent=url.href;
+        $('#native-share').disabled=false;
+        $('#share-status').textContent=e.message+' 盤面のURLは共有できます。';
+      }
+    }
+  }
 };
+$('#overlay-share').onclick=()=>$('#share-puzzle').onclick();
 function selectShareUrl(){
   const input=$('#share-url');input.focus();input.select();input.setSelectionRange(0,input.value.length);
 }
 $('#share-url').onclick=selectShareUrl;
-$('#copy-share').onclick=async()=>{
-  const button=$('#copy-share');button.disabled=true;
+async function copyShare(button,input){
+  button.disabled=true;
   let copied=false;
+  const select=()=>{input.focus();input.select();input.setSelectionRange(0,input.value.length);};
   try{
     if(typeof navigator.clipboard?.writeText==='function'){
-      try{await navigator.clipboard.writeText($('#share-url').value);copied=true;}catch{}
+      try{await navigator.clipboard.writeText(input.value);copied=true;}catch{}
     }
-    if(!copied){selectShareUrl();try{copied=document.execCommand('copy')===true;}catch{}}
+    if(!copied){select();try{copied=document.execCommand('copy')===true;}catch{}}
     if(copied)$('#share-status').textContent='コピーしました。リンクを相手に送ってください。';
-    else{selectShareUrl();$('#share-status').textContent='自動コピーできませんでした。選択したURLを長押し、またはコピー操作で持ち出してください。表示中のリンクも長押しできます。';}
+    else{select();$('#share-status').textContent='自動コピーできませんでした。選択した内容を長押し、またはコピー操作で持ち出してください。表示中のリンクも長押しできます。';}
   }finally{button.disabled=false;}
-};
+}
+$('#copy-share').onclick=()=>copyShare($('#copy-share'),$('#share-url'));
+$('#copy-result').onclick=()=>copyShare($('#copy-result'),$('#result-share-text'));
 $('#native-share').onclick=async()=>{
-  try{await navigator.share({title:'Star Battle',text:puzzle.size+' × '+puzzle.size+'の盤面に挑戦！',url:$('#share-url').value});}
+  try{await navigator.share({title:'Star Battle',text:shareMessage,url:$('#share-url').value});}
   catch(e){$('#share-status').textContent=e.name==='AbortError'?'共有をキャンセルしました。表示中のURLも利用できます。':'共有メニューを開けませんでした。表示中のURLをコピーしてください。';}
 };
 $('#close-share').onclick=()=>$('#share-dialog').close();
@@ -560,9 +594,20 @@ async function previewShared(){
   try{
     if(!/^[a-f0-9]{32}$/.test(sharedId))throw new Error('共有URLが正しくありません。');
     const shared=await api('puzzles/'+sharedId);
+    $('#shared-title').textContent='共有された盤面';
+    $('#shared-result').textContent='';
+    if(sharedClearId){
+      try{
+        if(!/^[a-f0-9-]{36}$/.test(sharedClearId))throw new Error('クリア結果のURLが正しくありません。');
+        const result=await api('clears/'+sharedClearId);
+        if(result.puzzle.id!==sharedId)throw new Error('クリア結果と盤面が一致しません。');
+        $('#shared-title').textContent='共有されたクリア結果';
+        $('#shared-result').textContent=`${result.name}：${result.seconds}秒でクリア！ ${result.points}pt`;
+      }catch{ $('#shared-result').textContent='このクリア結果は確認できません。盤面には挑戦できます。'; }
+    }
     $('#shared-description').textContent=shared.size+' × '+shared.size+' / クリア最大 '+shared.points+' pt。同じ盤面に挑戦します。以前遊んだ盤面なら自分の続きから再開します。';
     $('#shared-dialog').showModal();
-  }catch(e){sharedId=null;history.replaceState(null,'','/');status(e.message);if(me)await choose();else openProfile();}
+  }catch(e){sharedId=null;sharedClearId=null;history.replaceState(null,'','/');status(e.message);if(me)await choose();else openProfile();}
 }
 async function startShared(){
   if(!sharedId)return;
@@ -573,12 +618,12 @@ async function startShared(){
     await flushMemos();
     const state=await api('games',{request_id:requestId(),puzzle_id:sharedId});
     applyGame(state,true);gameMessage();$('#shared-dialog').close();
-    sharedId=null;history.replaceState(null,'','/');
+    sharedId=null;sharedClearId=null;history.replaceState(null,'','/');
   }finally{busy=false;controls();}
 }
 $('#play-shared').onclick=()=>startShared().catch(e=>{$('#shared-description').textContent=e.message;});
-$('#close-shared').onclick=()=>{sharedId=null;history.replaceState(null,'','/');$('#shared-dialog').close();if(me)choose();else openProfile();};
-$('#shared-dialog').addEventListener('cancel',()=>{sharedId=null;history.replaceState(null,'','/');if(me)choose();else openProfile();});
+$('#close-shared').onclick=()=>{sharedId=null;sharedClearId=null;history.replaceState(null,'','/');$('#shared-dialog').close();if(me)choose();else openProfile();};
+$('#shared-dialog').addEventListener('cancel',()=>{sharedId=null;sharedClearId=null;history.replaceState(null,'','/');if(me)choose();else openProfile();});
 async function refreshAccountGame(){
   if(!me?.username||!game||document.hidden||busy||sending||moveQueue.length||memoPromise)return;
   try{
