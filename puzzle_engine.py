@@ -6,6 +6,7 @@ import time
 import threading
 from functools import lru_cache
 from collections import deque
+from logic_solver import logical_result
 
 EXPERT_POINTS = 100
 RELAXED_POINTS = 50
@@ -121,6 +122,9 @@ def certify_generated(puzzle):
         raise InvalidPuzzle('Stored solution does not match board')
     if puzzle['points'] != points or puzzle['fingerprint'] != fingerprint(regions):
         raise InvalidPuzzle('Invalid puzzle metadata')
+    deduction = logical_result(regions)
+    if not deduction.solved or list(deduction.columns) != canonical:
+        raise InvalidPuzzle('Puzzle requires deductions beyond supported non-trial rules')
     if level.startswith('expert'):
         relaxed = level == 'expert_relaxed'
         if not all(valid_area(regions,i,relaxed) for i in range(size)) or (relaxed and not easier_clues(regions)):
@@ -239,7 +243,7 @@ def _generate(difficulty, rng=None, timeout=5, style=None):
             continue
         if shape == 'compact' and spanning_shapes(regions):
             continue
-        if solutions(regions) == [cols]:
+        if solutions(regions) == [cols] and logical_result(regions).solved:
             labels = list(range(n));rng.shuffle(labels)
             regions = [[labels[area] for area in row] for row in regions]
             return dict(size=n, difficulty=difficulty, points=points, regions=regions,
@@ -278,7 +282,7 @@ def vary_expert(seed, rng):
         for target in targets:
             old = regions[r][c]
             regions[r][c] = target
-            if valid_area(regions,old,relaxed) and valid_area(regions,target,relaxed) and (not relaxed or easier_clues(regions)) and len(solutions(regions)) == 1:
+            if valid_area(regions,old,relaxed) and valid_area(regions,target,relaxed) and (not relaxed or easier_clues(regions)) and len(solutions(regions)) == 1 and logical_result(regions).solved:
                 changed += 1
                 break
             regions[r][c] = old

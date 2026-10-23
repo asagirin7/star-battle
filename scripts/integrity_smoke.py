@@ -2,9 +2,13 @@
 import itertools
 import os
 import uuid
+import sys
 from pathlib import Path
 import httpx
 from playwright.sync_api import sync_playwright, expect
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from logic_solver import logical_result
 
 BASE_URL=os.getenv('BASE_URL','http://127.0.0.1:8000')
 
@@ -32,6 +36,8 @@ with httpx.Client(base_url=BASE_URL,timeout=30) as client:
             found=independent_solutions(game['puzzle']['regions'])
             assert len(found)==1,(level,game['puzzle']['id'],len(found))
             cols=found[0]
+            deduction=logical_result(game['puzzle']['regions'])
+            assert deduction.solved and list(deduction.columns)==cols,(level,'deductions stalled')
             url=f"/api/games/{game['id']}/stars"
             placed=client.post(url,json={'row':n-1,'col':cols[-1],'request_id':nonce()})
             placed.raise_for_status()
