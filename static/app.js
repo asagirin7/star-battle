@@ -79,7 +79,7 @@ $('#profile-form').onsubmit = async event => {
 };
 function savedKey() { return `star-battle:${me.id}:${game.id}`; }
 function queueKey() { return `star-queue:${me.id}:${game.id}`; }
-function save() { try { localStorage.setItem(savedKey(), JSON.stringify(cells.map(v=>v===2?2:0))); } catch {} saveQueue(); }
+function save() { try { localStorage.setItem(savedKey(), JSON.stringify(cells.map(v=>v===2||v===3?v:0))); } catch {} saveQueue(); }
 function saveQueue() { try {localStorage.setItem(queueKey(),JSON.stringify(moveQueue));} catch {} }
 function waiting(i) {return moveQueue.some(m=>m.row*puzzle.size+m.col===i);}
 function ended() {return !game || game.completed || game.game_over;}
@@ -90,14 +90,14 @@ function memoSnapshot(){
   return snapshot;
 }
 function restoreMemos(snapshot){
-  cells=cells.map((v,i)=>v===1?1:snapshot[i]===2?2:0);
+  cells=cells.map((v,i)=>v===1?1:snapshot[i]===2||snapshot[i]===3?snapshot[i]:0);
   for(const move of moveQueue)if(snapshot.suppressed?.[move.request_id])move.suppressed=[...snapshot.suppressed[move.request_id]];
 }
 function forbidden(row,col,i){
   const r=Math.floor(i/puzzle.size),c=i%puzzle.size;
   return r===row||c===col||puzzle.regions[r][c]===puzzle.regions[row][col]||(Math.abs(r-row)<=1&&Math.abs(c-col)<=1);
 }
-function visibleValue(i){return cells[i]===1?1:cells[i]===2||autoPreview.has(i)?2:0;}
+function visibleValue(i){return cells[i]===1?1:cells[i]===3?3:cells[i]===2||autoPreview.has(i)?2:0;}
 function paintMemo(i,value){
   if(!mutable(i))return;
   cells[i]=value;
@@ -124,7 +124,7 @@ function applyGame(state, loadMemos=false, draw=true) {
   }catch{}
   if(loadMemos) {
     cells=Array(puzzle.size**2).fill(0);undo=[];moveQueue=[];
-    try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length)cells=stored.map(v=>v===2?2:0);} catch {}
+    try {const stored=JSON.parse(localStorage.getItem(savedKey()));if(Array.isArray(stored)&&stored.length===cells.length)cells=stored.map(v=>v===2||v===3?v:0);} catch {}
     try {
       const stored=JSON.parse(localStorage.getItem(queueKey()));
       if(Array.isArray(stored))moveQueue=stored.filter(m=>Number.isInteger(m.row)&&Number.isInteger(m.col)&&m.row>=0&&m.col>=0&&m.row<puzzle.size&&m.col<puzzle.size&&typeof m.request_id==='string');
@@ -133,7 +133,7 @@ function applyGame(state, loadMemos=false, draw=true) {
       if(old&&!moveQueue.length)moveQueue=[old];localStorage.removeItem(oldKey);
     } catch {}
   }
-  cells=cells.map(v=>v===2?2:0);
+  cells=cells.map(v=>v===2||v===3?v:0);
   game.stars.forEach(([r,c])=>cells[r*puzzle.size+c]=1);
   if(ended()){moveQueue=[];saveQueue();}
   document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',(b.dataset.level===level||(b.dataset.level==='expert'&&level==='expert_relaxed'))));
@@ -179,12 +179,12 @@ function renderCell(button,i) {
   button.classList.toggle('locked',value===1);
   button.classList.toggle('pending',pending);
   button.classList.toggle('marked',value===2&&!pending);
-  const glyph=value===1||pending?'★':value===2?'×':'';
+  const glyph=value===1||pending?'★':value===2?'×':value===3?'⚑':'';
   const mark=button.firstElementChild;
   if(mark.textContent!==glyph)mark.textContent=glyph;
-  const markClass=value===2&&!pending?'mark':'';
+  const markClass=value===2&&!pending?'mark':value===3&&!pending?'flag':'';
   if(mark.className!==markClass)mark.className=markClass;
-  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':'空白'}`);
+  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':value===3?'旗':'空白'}`);
 }
 function render() {
   if(!puzzle)return;
@@ -275,10 +275,11 @@ async function pumpMoves() {
 const input=attachBoardInput($('#board'),{
   blocked:()=>busy||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
   snapshot:memoSnapshot,paint:paintMemo,
+  flag:i=>{const prev=memoSnapshot();paintMemo(i,cells[i]===3?0:3);commit(prev);},
   render:()=>render(),commit,
   restoreFirstTap:(base,i)=>{
     // Only revert this tap: another star response may have added notes between taps.
-    if(cells[i]!==1&&!waiting(i))cells[i]=base[i]===2?2:0;
+    if(cells[i]!==1&&!waiting(i))cells[i]=base[i]===2||base[i]===3?base[i]:0;
     for(const move of moveQueue)if(base.suppressed?.[move.request_id]){
       const suppressed=new Set(move.suppressed||[]);
       if(base.suppressed[move.request_id].includes(i))suppressed.add(i);else suppressed.delete(i);

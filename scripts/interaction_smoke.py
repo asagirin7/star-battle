@@ -59,6 +59,24 @@ with sync_playwright() as p:
                 page.mouse.up()
         page.evaluate('window.originalCell = document.querySelector(".cell")')
         before=geometry(page);scroll=page.evaluate('scrollY')
+        def hold(i,cancel=False):
+            x,y=point(i)
+            if touch:
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchStart','touchPoints':[{'x':x,'y':y,'id':0}]})
+                page.wait_for_timeout(650)
+                cdp.send('Input.dispatchTouchEvent',{'type':'touchEnd','touchPoints':[]})
+            else:
+                page.mouse.move(x,y);page.mouse.down();page.wait_for_timeout(650);page.mouse.up()
+        hold(0);expect(page.locator('.cell').nth(0)).to_have_text('⚑')
+        stable(page,before)
+        hold(0);expect(page.locator('.cell').nth(0)).to_have_text('')
+        page.keyboard.press('Control+z')
+        expect(page.locator('.cell').nth(0)).to_have_text('⚑')
+        page.reload();expect(page.locator('.cell').nth(0)).to_have_text('⚑')
+        page.locator('#board').scroll_into_view_if_needed()
+        page.evaluate('window.originalCell = document.querySelector(".cell")')
+        before=geometry(page);scroll=page.evaluate('scrollY')
+        hold(0);expect(page.locator('.cell').nth(0)).to_have_text('')
         tap(0);expect(page.locator('.cell').nth(0)).to_have_text('×')
         stable(page,before)
         # Fast strokes must paint skipped cells and form one undo step.

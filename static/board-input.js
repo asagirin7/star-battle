@@ -1,7 +1,7 @@
 'use strict';
 // Same gestures as the Trameria game. Keep all pointer handling on stable cells.
 window.attachBoardInput = function(board, actions) {
-  const DOUBLE_MS = 320;
+  const DOUBLE_MS = 320, HOLD_MS = 550;
   let drag = null, lastTap = null;
   const cellAt = event => {
     const el = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-index]');
@@ -9,7 +9,7 @@ window.attachBoardInput = function(board, actions) {
   };
   function finish(cancelled=false) {
     if (!drag) return;
-    const d = drag; drag = null;
+    const d = drag; clearTimeout(d.timer); drag = null;
     if (board.hasPointerCapture(d.pointerId)) board.releasePointerCapture(d.pointerId);
     if (d.moved) { lastTap = null; actions.commit(d.prev); }
     else if(cancelled) lastTap = null;
@@ -24,13 +24,21 @@ window.attachBoardInput = function(board, actions) {
     const i=cellAt(event); if(i<0)return;
     event.preventDefault();
     drag={start:i, last:i, moved:false, prev:actions.snapshot(),
-          mode:actions.value(i)===2?0:2, pointerId:event.pointerId};
+          mode:actions.value(i)===2?0:2, pointerId:event.pointerId, x:event.clientX, y:event.clientY, held:false};
+    const current=drag;
+    drag.timer=setTimeout(()=>{
+      if(drag!==current || drag.moved || actions.blocked() || !actions.mutable(i))return;
+      drag.held=true;lastTap=null;actions.flag(i);
+    },HOLD_MS);
     board.setPointerCapture(event.pointerId);
   });
   board.addEventListener('pointermove', event => {
     if(!drag || event.pointerId!==drag.pointerId)return;
     event.preventDefault();
+    if(drag.held)return;
+    if(Math.hypot(event.clientX-drag.x,event.clientY-drag.y)>10)clearTimeout(drag.timer);
     const i=cellAt(event);if(i<0 || i===drag.last)return;
+    clearTimeout(drag.timer);
     if(!drag.moved){drag.moved=true;lastTap=null;paint(drag.start);}
     const n=actions.size(),r0=Math.floor(drag.last/n),c0=drag.last%n,r1=Math.floor(i/n),c1=i%n;
     const steps=Math.max(Math.abs(r1-r0),Math.abs(c1-c0));
@@ -41,6 +49,7 @@ window.attachBoardInput = function(board, actions) {
     if(!drag || event.pointerId!==drag.pointerId)return;
     event.preventDefault();
     const d=drag,i=cellAt(event);
+    if(d.held){finish();lastTap=null;return;}
     if(d.moved || i!==d.start){finish(i!==d.start);return;}
     finish();
     if(!actions.mutable(i)){lastTap=null;return;}
@@ -54,7 +63,7 @@ window.attachBoardInput = function(board, actions) {
   });
   for(const name of ['pointercancel','lostpointercapture'])board.addEventListener(name,()=>finish(true));
   board.addEventListener('contextmenu', event => {
-    event.preventDefault();if(actions.blocked())return;
+    event.preventDefault();if(drag || event.pointerType==='touch' || actions.blocked())return;
     const i=cellAt(event);if(i<0 || !actions.mutable(i))return;
     finish(true);lastTap=null;actions.star(i);
   });
