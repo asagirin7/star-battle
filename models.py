@@ -17,6 +17,7 @@ class Player(Base):
 
 class Game(Base):
     __tablename__ = 'games'
+    __table_args__ = (UniqueConstraint('retry_of', name='uq_games_retry_of'),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     player_id: Mapped[str] = mapped_column(ForeignKey('players.id'), index=True)
     puzzle_id: Mapped[str] = mapped_column(String(32))
@@ -25,6 +26,8 @@ class Game(Base):
     mistakes: Mapped[int] = mapped_column(default=0, server_default='0')
     active: Mapped[bool] = mapped_column(default=True, server_default='true')
     move_revision: Mapped[int] = mapped_column(default=0, server_default='0')
+    retry_count: Mapped[int] = mapped_column(default=0, server_default='0')
+    retry_of: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 class Clear(Base):
@@ -37,6 +40,7 @@ class Clear(Base):
     points: Mapped[int]
     mistakes: Mapped[int] = mapped_column(default=0, server_default='0')
     seconds: Mapped[int]
+    retry_count: Mapped[int] = mapped_column(default=0, server_default='0')
     cleared_at: Mapped[float] = mapped_column(Float, default=time.time, index=True)
 
 

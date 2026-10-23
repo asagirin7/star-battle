@@ -256,6 +256,7 @@ def game_view(session, game):
                 lives=max(0, life_limit(puzzle.size)-game.mistakes),
                 completed=clear is not None, score=clear.points if clear and clear.game_id==game.id else 0,
                 clear_id=clear.id if clear else None,
+                retries=game.retry_count,
                 seconds=(clear.seconds if clear else max(0, int((game.finished_at or time.time())-game.started_at))),
                 game_over=game.mistakes >= life_limit(puzzle.size))
 
@@ -314,6 +315,34 @@ def owned_game(session, game_id, player_id):
     return game
 
 
+@app.post('/api/games/{game_id}/retry')
+def retry_game(game_id: str, p: Player = Depends(player), session: Session = Depends(db)):
+    p = writable_player(session,p)
+    game = owned_game(session,game_id,p.id)
+    session.execute(update(Game).where(Game.id==game.id).values(move_revision=Game.move_revision+1))
+    session.refresh(game)
+    # A retry belongs to its failed source, not the device or HTTP request ID.
+    # Both concurrent devices and a delayed duplicate return the same successor.
+    existing=session.scalar(select(Game).where(Game.retry_of==game.id))
+    if existing:
+        result=game_view(session,existing)
+        session.commit()
+        return result
+    state=game_view(session,game)
+    if state['completed'] or not state['game_over']:
+        raise HTTPException(409,'ゲームオーバーの盤面だけリトライできます。')
+    count=session.scalar(select(func.max(Game.retry_count)).where(
+        Game.player_id==p.id,Game.puzzle_id==game.puzzle_id)) or 0
+    session.execute(update(Game).where(Game.player_id==p.id,Game.puzzle_id.in_(
+        select(Puzzle.id).where(Puzzle.difficulty==state['puzzle']['difficulty']))).values(active=False))
+    retry=Game(player_id=p.id,puzzle_id=game.puzzle_id,retry_of=game.id,retry_count=count+1)
+    session.add(retry)
+    session.flush()
+    result=game_view(session,retry)
+    session.commit()
+    return result
+
+
 @app.post('/api/games')
 def start(body: Start, p: Player = Depends(player), session: Session = Depends(db)):
     p = writable_player(session,p)
@@ -336,7 +365,7 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
         # Player row serializes opening the same shared puzzle on two devices.
         session.execute(update(Player).where(Player.id==p.id).values(name=Player.name))
         existing = session.scalar(select(Game).where(Game.player_id==p.id, Game.puzzle_id==puzzle.id)
-                                  .order_by(select(Clear.id).where(Clear.game_id==Game.id).exists().desc(),Game.started_at.desc()))
+                                  .order_by(Game.retry_count.desc(),Game.started_at.desc()))
         session.execute(update(Game).where(Game.player_id==p.id, Game.puzzle_id.in_(
             select(Puzzle.id).where(Puzzle.difficulty==puzzle.difficulty))).values(active=False))
         if existing:
@@ -423,7 +452,7 @@ def shared_clear(clear_id: str, session: Session = Depends(db)):
         checked_solution(puzzle.regions)
     except InvalidPuzzle:
         raise HTTPException(404, 'このクリア結果は現在共有できません。')
-    return dict(id=clear.id,name=owner.name,seconds=clear.seconds,points=clear.points,
+    return dict(id=clear.id,name=owner.name,seconds=clear.seconds,points=clear.points,retries=clear.retry_count,
                 cleared_at=clear.cleared_at,puzzle=puzzle_view(puzzle))
 
 
@@ -484,7 +513,8 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
         if valid_stars(puzzle.regions,stars,complete=True):
             game.finished_at = time.time()
             session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
-                              points=clear_points(puzzle.size, game.mistakes, puzzle.difficulty), mistakes=game.mistakes,
+                              points=0 if game.retry_count else clear_points(puzzle.size, game.mistakes, puzzle.difficulty),
+                              retry_count=game.retry_count,mistakes=game.mistakes,
                               seconds=max(0, int(time.time()-game.started_at))))
     session.commit()
     return dict(correct=bool(previous.correct and correct) if previous else correct,

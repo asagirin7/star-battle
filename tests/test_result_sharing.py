@@ -22,7 +22,7 @@ def test_official_clear_result_is_public_but_attempt_and_identity_stay_private(c
     with Session(main.engine) as db:
         stored=db.scalar(select(Clear).where(Clear.game_id==game['id']))
         expected=dict(id=stored.id,name=owner['name'],seconds=stored.seconds,
-                      points=stored.points,cleared_at=stored.cleared_at,puzzle=game['puzzle'])
+                      points=stored.points,retries=0,cleared_at=stored.cleared_at,puzzle=game['puzzle'])
         assert stored.seconds>=42
     with TestClient(main.app) as visitor:
         public=visitor.get('/api/clears/'+clear_id)

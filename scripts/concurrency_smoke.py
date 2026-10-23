@@ -40,3 +40,22 @@ with httpx.Client(base_url=BASE_URL,timeout=30) as c:
     assert state['mistakes']==3 and state['lives']==0 and state['game_over']
     assert c.get('/api/me').json()['points']==2
     print('PASS: 8 concurrent retries cost 1 life, 8 final moves award once, game-over caps mistakes at 3')
+    # Explicit board retries are one successor per failed game, even across
+    # different HTTP requests. A zero-point retry clear never repeats the award.
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses=list(executor.map(lambda _: c.post(f"/api/games/{state['id']}/retry",json={}),range(8)))
+    assert all(r.status_code==200 for r in responses),[r.text for r in responses]
+    assert len({r.json()['id'] for r in responses})==1
+    retry=responses[0].json()
+    assert retry['retries']==1 and retry['puzzle']==state['puzzle']
+    cols=solutions(retry['puzzle']['regions'])[0]
+    for row,col in enumerate(cols):
+        result=c.post(f"/api/games/{retry['id']}/stars",json={'row':row,'col':col,'request_id':nonce()})
+        result.raise_for_status()
+    cleared=result.json()['game']
+    assert cleared['completed'] and cleared['score']==0
+    assert c.get('/api/me').json()['points']==2
+    official=c.get('/api/clears/'+cleared['clear_id']).json()
+    assert official['retries']==1 and official['points']==0
+    assert c.post(f"/api/games/{retry['id']}/retry",json={}).status_code==409
+    print('PASS: concurrent explicit retry creates one trial; retry clear awards zero and shares official count')

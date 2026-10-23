@@ -210,16 +210,18 @@ function applyGame(state, loadMemos=false, draw=true) {
   if(draw)render();
 }
 function rewardMessage() {
+  if(game.retries)return `リトライ${game.retries}回・クリア +0 pt`;
   return puzzle.scoring==='fixed'?`ノーミスクリア！ +${game.score} pt`:`残機 ${game.lives} × ${puzzle.multiplier} = +${game.score} pt`;
 }
 function gameMessage() {
   if(game.completed)status(`クリア！ ✦ ${rewardMessage()}。次の盤面に挑戦しよう。`,true);
-  else if(game.game_over)status('ゲームオーバー。NEXTゲームで、もう一度挑戦しよう。');
+  else if(game.game_over)status(`ゲームオーバー。リトライ${game.retries||0}回。同じ盤面を0点でリトライできます。`);
+  else if(game.retries)status(`リトライ${game.retries}回・この挑戦のクリアは0 pt。`);
   else status((puzzle.scoring==='fixed'?`9×9は1ミスで終了、クリアで${puzzle.points} pt。`:'')+'1回タップで×、2回タップで★。ドラッグで×を付け外し。');
 }
 function controls() {
   const changing=busy||sending||moveQueue.length>0;
-  for(const selector of ['#advance','#next','#overlay-next','#expert-mode', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
+  for(const selector of ['#retry-board','#overlay-retry','#advance','#next','#overlay-next','#expert-mode', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
   disabled($('#undo'),busy||ended()||!undo.length);
   disabled($('#reset'),busy||ended());
   $('#retry-moves').hidden=!moveQueue.length||sending;
@@ -278,6 +280,8 @@ function render() {
   result.hidden=!(game.completed||game.game_over)||dismissedResults.has(game.id);
   $('#dismiss-result').hidden=!game.game_over;
   $('#overlay-share').hidden=!game.completed;
+  $('#retry-board').hidden=!game.game_over||game.completed;
+  $('#overlay-retry').hidden=!game.game_over||game.completed;
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
   text($('#result-message'),game.completed?rewardMessage():'次の盤面で、もう一度。');
@@ -380,6 +384,16 @@ $('#dismiss-result').onclick=()=>{
   render();status('ゲームオーバー。盤面を確認できます。続けるときは「次の盤面」へ。');
   $('#next').focus({preventScroll:true});
 };
+async function retryBoard(){
+  if(busy||sending||moveQueue.length||!game?.game_over)return;
+  busy=true;controls();
+  try{
+    await flushMemos();
+    const state=await api('games/'+game.id+'/retry',{});
+    applyGame(state,true);gameMessage();
+  }catch(e){status(e.message);}finally{busy=false;controls();}
+}
+$('#retry-board').onclick=retryBoard;$('#overlay-retry').onclick=retryBoard;
 $('#next').onclick=()=>choose(true);$('#advance').onclick=()=>choose(true);$('#overlay-next').onclick=()=>choose(true);
 function undoMemo(){
   if(busy||!undo.length||ended())return;
@@ -549,7 +563,7 @@ $('#share-puzzle').onclick=async()=>{
       if(game.id!==current||!$('#share-dialog').open)return;
       if(verifiedClear.puzzle.id!==puzzle.id)throw new Error('クリア結果と盤面が一致しません。');
       url.searchParams.set('c',verifiedClear.id);
-      shareMessage=`Star Battle ${verifiedClear.puzzle.size}×${verifiedClear.puzzle.size}を${verifiedClear.seconds}秒でクリア！ ${verifiedClear.points}pt`;
+      shareMessage=`Star Battle ${verifiedClear.puzzle.size}×${verifiedClear.puzzle.size}を${verifiedClear.seconds}秒でクリア！ ${verifiedClear.points}pt・リトライ${verifiedClear.retries||0}回`;
       $('#share-title').textContent='クリア結果をシェア';
       $('#share-url').value=url.href;$('#share-link').href=url.href;$('#share-link').textContent=url.href;
       $('#result-share-text').value=shareMessage+'\n'+url.href;$('#result-share-text').hidden=false;$('#copy-result').hidden=false;
@@ -602,7 +616,7 @@ async function previewShared(){
         const result=await api('clears/'+sharedClearId);
         if(result.puzzle.id!==sharedId)throw new Error('クリア結果と盤面が一致しません。');
         $('#shared-title').textContent='共有されたクリア結果';
-        $('#shared-result').textContent=`${result.name}：${result.seconds}秒でクリア！ ${result.points}pt`;
+        $('#shared-result').textContent=`${result.name}：${result.seconds}秒でクリア！ ${result.points}pt・リトライ${result.retries||0}回`;
       }catch{ $('#shared-result').textContent='このクリア結果は確認できません。盤面には挑戦できます。'; }
     }
     $('#shared-description').textContent=shared.size+' × '+shared.size+' / クリア最大 '+shared.points+' pt。同じ盤面に挑戦します。以前遊んだ盤面なら自分の続きから再開します。';

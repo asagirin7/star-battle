@@ -52,7 +52,7 @@ def complete(page):
     official=page.request.get(BASE+'/api/clears/'+state['clear_id']).json()
     url=page.locator('#share-url').input_value()
     assert parse_qs(urlparse(url).query)=={'p':[state['puzzle']['id']],'c':[state['clear_id']]}
-    message=f"Star Battle 6×6を{official['seconds']}秒でクリア！ {official['points']}pt"
+    message=f"Star Battle 6×6を{official['seconds']}秒でクリア！ {official['points']}pt・リトライ0回"
     assert page.locator('#result-share-text').input_value()==message+'\n'+url
     page.locator('#native-share').click()
     assert page.evaluate('window.nativeResult')=={'title':'Star Battle','text':message,'url':url}
@@ -84,12 +84,12 @@ with sync_playwright() as p:
     b.goto(bare);expect(b.locator('#shared-dialog')).to_be_visible();b.locator('#play-shared').click();register(b,'二人目')
     first,official,result=complete(b)
     c.goto(result+'&seconds=1&points=9999');expect(c.locator('#shared-title')).to_have_text('共有されたクリア結果')
-    expect(c.locator('#shared-result')).to_have_text(f"二人目：{official['seconds']}秒でクリア！ {official['points']}pt")
+    expect(c.locator('#shared-result')).to_have_text(f"二人目：{official['seconds']}秒でクリア！ {official['points']}pt・リトライ0回")
     c.locator('#play-shared').click();register(c,'<img src=x>')
     second,other,next_result=complete(c)
     assert first['id']!=second['id'] and first['puzzle']==second['puzzle']
     assert first['clear_id']!=second['clear_id']
-    a.goto(next_result);expect(a.locator('#shared-result')).to_have_text(f"<img src=x>：{other['seconds']}秒でクリア！ {other['points']}pt")
+    a.goto(next_result);expect(a.locator('#shared-result')).to_have_text(f"<img src=x>：{other['seconds']}秒でクリア！ {other['points']}pt・リトライ0回")
     assert a.locator('#shared-result img').count()==0
     a.locator('#play-shared').click();expect(a.locator('.cell')).to_have_count(36)
     assert a.request.get(BASE+'/api/games/current').json()['completed'] is False
