@@ -92,7 +92,12 @@ def consolidate(session, username, source_id, expected_target_id, expected_sourc
     active=defaultdict(list)
     for game in games:
         if game.active:
-            active[session.get(Puzzle,game.puzzle_id).difficulty].append(game)
+            puzzle=session.get(Puzzle,game.puzzle_id)
+            if puzzle is None:
+                # Early imported history can lack a playable Puzzle row.
+                game.active=False
+                continue
+            active[puzzle.difficulty].append(game)
     cleared=set(by_puzzle)
     for entries in active.values():
         def priority(game):

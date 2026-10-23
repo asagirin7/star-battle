@@ -527,19 +527,33 @@ $('#logout').onclick=async()=>{
     await flushMemos();await api('account/logout',{});location.reload();
   }catch(e){$('#account-error').textContent=e.message;}finally{button.disabled=false;}
 };
-$('#share-puzzle').onclick=async()=>{
+$('#share-puzzle').onclick=()=>{
   if(!puzzle)return;
   const url=new URL('/',location.origin);url.searchParams.set('p',puzzle.id);
-  $('#share-url').value=url.href;$('#share-status').textContent='';
-  if(navigator.share){
-    try{await navigator.share({title:'Star Battle',text:puzzle.size+' × '+puzzle.size+'の盤面に挑戦！',url:url.href});return;}
-    catch(e){if(e.name==='AbortError')return;}
-  }
+  $('#share-url').value=url.href;$('#share-link').href=url.href;$('#share-link').textContent=url.href;
+  $('#share-status').textContent='リンクをコピーするか、URLを長押しして共有できます。';
+  $('#native-share').hidden=typeof navigator.share!=='function';
   $('#share-dialog').showModal();
 };
+function selectShareUrl(){
+  const input=$('#share-url');input.focus();input.select();input.setSelectionRange(0,input.value.length);
+}
+$('#share-url').onclick=selectShareUrl;
 $('#copy-share').onclick=async()=>{
-  try{await navigator.clipboard.writeText($('#share-url').value);$('#share-status').textContent='コピーしました。';}
-  catch{ $('#share-url').focus();$('#share-url').select();$('#share-status').textContent='URLを選択しました。コピーして共有してください。';}
+  const button=$('#copy-share');button.disabled=true;
+  let copied=false;
+  try{
+    if(typeof navigator.clipboard?.writeText==='function'){
+      try{await navigator.clipboard.writeText($('#share-url').value);copied=true;}catch{}
+    }
+    if(!copied){selectShareUrl();try{copied=document.execCommand('copy')===true;}catch{}}
+    if(copied)$('#share-status').textContent='コピーしました。リンクを相手に送ってください。';
+    else{selectShareUrl();$('#share-status').textContent='自動コピーできませんでした。選択したURLを長押し、またはコピー操作で持ち出してください。表示中のリンクも長押しできます。';}
+  }finally{button.disabled=false;}
+};
+$('#native-share').onclick=async()=>{
+  try{await navigator.share({title:'Star Battle',text:puzzle.size+' × '+puzzle.size+'の盤面に挑戦！',url:$('#share-url').value});}
+  catch(e){$('#share-status').textContent=e.name==='AbortError'?'共有をキャンセルしました。表示中のURLも利用できます。':'共有メニューを開けませんでした。表示中のURLをコピーしてください。';}
 };
 $('#close-share').onclick=()=>$('#share-dialog').close();
 async function previewShared(){

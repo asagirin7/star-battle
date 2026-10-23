@@ -81,15 +81,68 @@ with sync_playwright() as p:
     expect(b.locator('.cell').nth(3)).to_have_text('⚑')
     expect(b.locator('.cell').nth(4)).to_have_text('×')
     # Get the same share URL that the UI displays and open it anonymously.
-    a.evaluate("Object.defineProperty(navigator,'share',{value:undefined,configurable:true})")
+    # A native share implementation must not hide the URL dialog.
+    a.evaluate("Object.defineProperty(navigator,'share',{value:async()=>{window.nativeShares=(window.nativeShares||0)+1},configurable:true})")
     a.locator('#share-puzzle').click()
     expect(a.locator('#share-dialog')).to_be_visible()
     url=a.locator('#share-url').input_value()
     assert parse_qs(urlparse(url).query)['p']==[original['puzzle']['id']]
+    expect(a.locator('#share-link')).to_have_attribute('href',url)
+    expect(a.locator('#share-link')).to_have_text(url)
+    assert a.evaluate('window.nativeShares||0')==0
+    a.locator('#native-share').click()
+    assert a.evaluate('window.nativeShares')==1
+    # Verify an actual browser clipboard before testing denied/unsupported paths.
+    first.grant_permissions(['clipboard-read','clipboard-write'],origin=BASE)
+    a.bring_to_front()
+    a.locator('#copy-share').click()
+    expect(a.locator('#share-status')).to_contain_text('コピーしました')
+    assert a.evaluate('navigator.clipboard.readText()')==url
+    # Clipboard success, denial with legacy fallback, and total failure are distinct.
+    a.evaluate("Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.copiedUrl=text}},configurable:true})")
+    a.locator('#copy-share').click()
+    expect(a.locator('#share-status')).to_contain_text('コピーしました')
+    assert a.evaluate('window.copiedUrl')==url
+    a.evaluate("Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw new DOMException('denied','NotAllowedError')}},configurable:true});document.execCommand=command=>{window.copyFallback=command;return true}")
+    a.locator('#copy-share').click()
+    expect(a.locator('#share-status')).to_contain_text('コピーしました')
+    assert a.evaluate('window.copyFallback')=='copy'
+    a.evaluate("Object.defineProperty(navigator,'clipboard',{value:undefined,configurable:true});document.execCommand=()=>false")
+    a.locator('#copy-share').click()
+    expect(a.locator('#share-status')).to_contain_text('自動コピーできませんでした')
+    assert a.locator('#share-url').evaluate('(el)=>el.selectionStart===0 && el.selectionEnd===el.value.length')
+    a.locator('#close-share').click()
+    a.evaluate("Object.defineProperty(navigator,'share',{value:undefined,configurable:true})")
+    a.locator('#share-puzzle').click()
+    expect(a.locator('#native-share')).to_be_hidden()
+    expect(a.locator('#share-link')).to_have_attribute('href',url)
+    a.locator('#close-share').click()
+    # An embedded page with clipboard blocked still exposes a usable URL.
+    embedded=first.new_page()
+    # Production deliberately disallows framing. Remove only that response header
+    # in this test to exercise clipboard restrictions in an embedded browser.
+    def allow_test_frame(route):
+        response=route.fetch()
+        headers=dict(response.headers)
+        headers.pop('content-security-policy',None)
+        route.fulfill(response=response,headers=headers)
+    embedded.route(BASE+'/',allow_test_frame)
+    embedded.goto(BASE)
+    embedded.set_content('<iframe title="embedded game" src="'+BASE+'" style="width:300px;height:800px"></iframe>')
+    frame=embedded.frame_locator('iframe')
+    expect(frame.locator('.cell')).to_have_count(36)
+    frame.locator('#share-puzzle').click()
+    expect(frame.locator('#share-dialog')).to_be_visible()
+    frame.locator('#share-url').evaluate("()=>{Object.defineProperty(navigator,'clipboard',{value:{writeText:async()=>{throw new DOMException('blocked','NotAllowedError')}},configurable:true});document.execCommand=()=>false}")
+    frame.locator('#copy-share').click()
+    expect(frame.locator('#share-status')).to_contain_text('自動コピーできませんでした')
+    expect(frame.locator('#share-link')).to_have_attribute('href',url)
+    assert frame.locator('#share-url').input_value()==url
+    embedded.close()
     c.goto(url)
     expect(c.locator('#shared-dialog')).to_be_visible()
     c.locator('#play-shared').click()
-    c.locator('#name').fill('共有問題確認')
+    c.locator('#name').fill('共有盤面確認')
     c.locator('#profile-form button[type=submit]').click()
     expect(c.locator('.cell')).to_have_count(36)
     state=c.request.get(BASE+'/api/games/current').json()

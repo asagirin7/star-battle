@@ -96,3 +96,28 @@ def test_identity_mismatch_refuses_and_transaction_rolls_back(client):
             assert db.get(PlayerMerge,source['id']) is None
         assert client.get('/api/me').json()['points']==3
         assert destination.get('/api/me').json()['points']==0
+
+
+def test_merge_preserves_legacy_history_without_playable_puzzle(client):
+    source,token,game,pending=prepare(client)
+    with TestClient(main.app) as destination:
+        target=register(destination);account(destination)
+        with Session(main.engine) as db:
+            legacy=Game(player_id=source['id'],puzzle_id='legacy-missing-puzzle',active=True)
+            db.add(legacy);db.flush()
+            legacy_id=legacy.id
+            db.add(Clear(player_id=source['id'],puzzle_id=legacy.puzzle_id,
+                         game_id=legacy.id,points=2,mistakes=1,seconds=42))
+            db.add(GameMemo(game_id=legacy.id,cells=[3,2],revision=1))
+            db.commit()
+            result=consolidate(db,CREDENTIALS['username'],source['id'],target['id'],'Administrator')
+            db.commit()
+            assert result['target']['points']==5 and result['target']['clears']==2
+            preserved=db.get(Game,legacy_id)
+            assert preserved.player_id==target['id'] and not preserved.active
+            assert db.get(GameMemo,legacy_id).cells==[3,2]
+            assert db.scalar(select(Clear).where(Clear.game_id==legacy_id)).player_id==target['id']
+            assert db.get(Game,pending['id']).active
+            backup=db.get(PlayerMerge,source['id']).backup
+            assert next(g for g in backup['games'] if g['id']==legacy_id)['active'] is True
+        assert destination.get('/api/account/resume').json()['id']==pending['id']
