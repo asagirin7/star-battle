@@ -5,7 +5,7 @@ const hintLabels={star_exclusion:'確定星から除外',single_candidate:'残�
 const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT', expert_relaxed:'9 × 9 / 8 × 8相当'};
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
-let celebration=null,expertMode='expert';
+let celebration=null;
 let hintLoading=false,hintAttempt=null,hintDisplay=null,hintMessageContext=null;
 let launchPending=false,launchRefreshing=false,accountRefreshing=false;
 let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
@@ -74,7 +74,6 @@ function loadServerMemos(state){
 try{
   autoCross=localStorage.getItem('star-auto-cross')==='true';
   const savedLevel=localStorage.getItem('star-level');if(label[savedLevel])level=savedLevel;
-  if(localStorage.getItem('star-expert-mode')==='expert_relaxed')expertMode='expert_relaxed';
 }catch{}
 function requestId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -192,7 +191,6 @@ function applyGame(state, loadMemos=false, draw=true) {
   game=state;puzzle=state.puzzle;level=puzzle.difficulty;
   try{
     localStorage.setItem('star-level',level);
-    if(puzzle.size===9){expertMode=level;localStorage.setItem('star-expert-mode',level);}
   }catch{}
   if(loadMemos) {
     try{if(localStorage.getItem(savedKey()+':result-hidden')==='true')dismissedResults.add(game.id);}catch{}
@@ -270,7 +268,7 @@ function gameMessage() {
 }
 function controls() {
   const changing=busy||hintLoading||launchRefreshing||sending||moveQueue.length>0;
-  for(const selector of ['#retry-board','#overlay-retry','#advance','#overlay-next','#expert-mode', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
+  for(const selector of ['#retry-board','#overlay-retry','#advance','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
   disabled($('#undo'),busy||hintLoading||launchRefreshing||ended()||!undo.length);
   disabled($('#reset'),busy||hintLoading||launchRefreshing||ended());
   disabled($('#hint'),changing||ended()||!me||!(me.hints>0));
@@ -340,9 +338,6 @@ function render() {
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
   text($('#result-message'),game.completed?rewardMessage():'次の盤面で、もう一度。');
-  $('#expert-mode').hidden=n!==9;
-  text($('#expert-mode'),level==='expert_relaxed'?'難しい9×9に戻す':'8×8相当の難易度にする');
-  attribute($('#expert-mode'),'aria-pressed',String(level==='expert_relaxed'));
   text($('#auto-cross'),`自動で× ${autoCross?'ON':'OFF'}`);
   attribute($('#auto-cross'),'aria-pressed',String(autoCross));
   if(board.dataset.puzzle!==puzzle.id){
@@ -426,12 +421,8 @@ const input=attachBoardInput($('#board'),{
 $('#retry-moves').onclick=pumpMoves;
 window.addEventListener('online',pumpMoves);
 document.querySelectorAll('[data-level]').forEach(button=>button.onclick=async()=>{
-  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)return;level=button.dataset.level==='expert'?expertMode:button.dataset.level;await choose();
+  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)return;level=button.dataset.level;await choose();
 });
-$('#expert-mode').onclick=async()=>{
-  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length)return;
-  level=level==='expert_relaxed'?'expert':'expert_relaxed';await choose();
-};
 $('#dismiss-result').onclick=()=>{
   if(!game?.game_over)return;
   dismissedResults.add(game.id);

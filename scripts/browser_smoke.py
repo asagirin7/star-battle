@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import uuid
 import urllib.request
 from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
@@ -181,7 +182,12 @@ with sync_playwright() as p:
         terminal(page,'ゲームオーバー')
         expect(page.locator('.cell')).to_have_count(81)
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 1回')
-        page.locator('#expert-mode').click()
+        assert page.locator('#expert-mode').count()==0
+        # Legacy relaxed boards remain playable through existing/shared URLs.
+        response=page.request.post(BASE_URL+'/api/games',data={'difficulty':'expert_relaxed','request_id':str(uuid.uuid4())})
+        assert response.ok, response.text()
+        page.evaluate("localStorage.setItem('star-level','expert_relaxed')")
+        page.reload()
         expect(page.locator('#puzzle-label')).to_contain_text('8 × 8相当')
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 1、ミス 0回')
         relaxed=page.request.get(BASE_URL+'/api/games/current?difficulty=expert_relaxed').json()
@@ -195,7 +201,8 @@ with sync_playwright() as p:
         page.reload()
         terminal(page,'クリア！ ✦')
         expect(page.locator('#puzzle-label')).to_contain_text('8 × 8相当')
-        page.locator('#expert-mode').click()
+        page.evaluate("localStorage.setItem('star-expert-mode','expert_relaxed')")
+        page.locator('[data-level="expert"]').click()
         expect(page.locator('#puzzle-label')).to_contain_text('EXPERT')
         terminal(page,'ゲームオーバー')
         assert not page.locator('.cell').evaluate_all("(cells)=>cells.some(b=>!b.style.background)")
