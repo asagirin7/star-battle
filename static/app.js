@@ -6,7 +6,7 @@ const label = {easy:'EASY', medium:'MEDIUM', hard:'HARD', expert:'EXPERT', exper
 let me=null,level='easy',puzzle=null,game=null,cells=[],undo=[],busy=false;
 let moveQueue=[],sending=false,pendingStart=null,autoCross=false,autoPreview=new Set();
 let celebration=null;
-let hintLoading=false,hintAttempt=null,hintDisplay=null,hintMessageContext=null;
+let hintLoading=false,hintAttempt=null,hintDisplay=null,hintMessageContext=null,currentHintMarks=null;
 let launchPending=false,launchRefreshing=false,accountRefreshing=false;
 let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
 let memoBase=[],memoTimer=null,memoPromise=null;
@@ -241,12 +241,45 @@ function hintContext(){
   if(!game)return '';
   return JSON.stringify([me?.id,game.id,game.stars,cells.flatMap((v,i)=>v===2?[i]:[])]);
 }
+function hintState(){
+  const n=puzzle.size;
+  return {stars:game.stars.map(([r,c])=>r*n+c).concat(moveQueue.map(m=>m.row*n+m.col)),crosses:cells.flatMap((v,i)=>v===2?[i]:[])};
+}
+// A shown hint stays while the player enters exactly its targets; any other
+// change makes it stale. Entered targets replace their preview marks.
+function hintProgress(){
+  if(!hintDisplay||!game||ended()||hintDisplay.game!==game.id||hintDisplay.owner!==me?.id)return 'stale';
+  const {hint,base}=hintDisplay,n=puzzle.size,now=hintState();
+  const targets=new Set(hint.target_cells.map(([r,c])=>r*n+c));
+  const baseStars=new Set(base.stars),baseCrosses=new Set(base.crosses),stars=new Set(now.stars),crosses=new Set(now.crosses);
+  if(base.stars.some(i=>!stars.has(i))||base.crosses.some(i=>!crosses.has(i)))return 'stale';
+  const addedStars=now.stars.filter(i=>!baseStars.has(i)),addedCrosses=now.crosses.filter(i=>!baseCrosses.has(i));
+  if(hint.action==='star'){
+    if(addedStars.some(i=>!targets.has(i))||(addedCrosses.length&&!addedStars.length))return 'stale';
+  }else if(addedStars.length||addedCrosses.some(i=>!targets.has(i)))return 'stale';
+  const filled=hint.action==='star'?stars:crosses;
+  return [...targets].every(i=>filled.has(i))?'done':'keep';
+}
+function hintMarks(){
+  const marks={cross:new Set(),star:new Set(),candidate:new Set(),sourceStar:new Set()};
+  if(!hintDisplay)return marks;
+  const n=puzzle.size,{hint}=hintDisplay,filled=i=>visibleValue(i)===1||visibleValue(i)===2||waiting(i);
+  for(const [r,c] of hint.target_cells){const i=r*n+c;if(!filled(i))marks[hint.action==='star'?'star':'cross'].add(i);}
+  for(const [r,c] of hint.source_cells){
+    const i=r*n+c;
+    if(cells[i]===1||waiting(i))marks.sourceStar.add(i);
+    else if(!filled(i)&&!marks.star.has(i)&&!marks.cross.has(i))marks.candidate.add(i);
+  }
+  return marks;
+}
 function hintView(){
-  const context=hintContext();
-  if(hintMessageContext!==null&&hintMessageContext!==context){
-    hintDisplay=null;hintMessageContext=null;
-    text($('#hint-message'),'根拠と次の一手を示します。星や×は自動で入りません。');
-    $('#hint-legend').hidden=true;
+  if(hintMessageContext!==null){
+    const progress=hintDisplay?hintProgress():hintMessageContext===hintContext()?'keep':'stale';
+    if(progress!=='keep'){
+      hintDisplay=null;hintMessageContext=progress==='done'?hintContext():null;
+      text($('#hint-message'),progress==='done'?'ヒントの一手を入力しました。':'根拠と次の一手を示します。星や×は自動で入りません。');
+      $('#hint-legend').hidden=true;
+    }
   }
   text($('#hint-balance'),`残り ${Number.isInteger(me?.hints)?me.hints:'—'} 回`);
   text($('#streak'),`${label[level]} 連続クリア ${me?.streaks?.[level]||0} 問`);
@@ -269,7 +302,7 @@ $('#hint').onclick=async()=>{
     if(me?.id!==owner)return;
     me.hints=result.balance;
     if(context!==hintContext())return;
-    hintDisplay={context,hint:result.hint};
+    hintDisplay={context,hint:result.hint,game:id,owner,base:hintState()};
     const targets=result.hint.target_cells.map(([r,c])=>`${r+1}行${c+1}列`).join('、');
     text($('#hint-message'),`${hintLabels[result.hint.technique]||result.hint.technique}（難易度点 ${result.hint.points}）\n${result.hint.explanation}\n次の一手：${targets}に${result.hint.action==='star'?'星を置けます':'×を付けられます'}。`);
     $('#hint-legend').hidden=false;
@@ -323,17 +356,21 @@ async function choose(next=false) {
 function renderCell(button,i) {
   const r=Math.floor(i/puzzle.size),c=i%puzzle.size,value=visibleValue(i),pending=value!==1&&waiting(i);
   button.classList.toggle('locked',value===1);
-  const matches=coords=>coords?.some(([row,col])=>row===r&&col===c);
-  button.classList.toggle('hint-source',Boolean(matches(hintDisplay?.hint.source_cells)));
-  button.classList.toggle('hint-target',Boolean(matches(hintDisplay?.hint.target_cells)));
+  const marks=currentHintMarks,source=marks.candidate.has(i)||marks.sourceStar.has(i),target=marks.cross.has(i)||marks.star.has(i);
+  button.classList.toggle('hint-source',source);
+  button.classList.toggle('hint-target',target);
+  button.classList.toggle('hint-cross',marks.cross.has(i));
+  button.classList.toggle('hint-star',marks.star.has(i));
+  button.classList.toggle('hint-candidate',marks.candidate.has(i));
+  button.classList.toggle('hint-source-star',marks.sourceStar.has(i));
   button.classList.toggle('pending',pending);
   button.classList.toggle('marked',value===2&&!pending);
-  const glyph=value===1||pending?'★':value===2?'×':value===3?'⚑':'';
+  const glyph=value===1||pending?'★':value===2?'×':'';
   const mark=button.firstElementChild;
   if(mark.textContent!==glyph)mark.textContent=glyph;
   const markClass=value===2&&!pending?'mark':value===3&&!pending?'flag':'';
   if(mark.className!==markClass)mark.className=markClass;
-  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':value===3?'旗':'空白'}${matches(hintDisplay?.hint.source_cells)?'、ヒントの根拠':''}${matches(hintDisplay?.hint.target_cells)?'、ヒントの次の一手':''}`);
+  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':value===3?'旗':'空白'}${marks.candidate.has(i)?'、ヒントの根拠になる星の候補':marks.sourceStar.has(i)?'、ヒントの根拠になる星':''}${marks.cross.has(i)?'、ヒント：×を付けられる':marks.star.has(i)?'、ヒント：星を置ける':''}`);
 }
 function render() {
   if(!puzzle)return;
@@ -393,6 +430,7 @@ function render() {
     attribute(chip,'aria-label',`エリア${region+1}、${placed?'星を配置済み':'星は未配置'}`);
     chip.classList.toggle('placed',placed);
   });
+  currentHintMarks=hintMarks();
   cells.forEach((_,i)=>renderCell(board.children[i],i));
   controls();updateTimer();
 }

@@ -3,6 +3,7 @@
 API calls are mocked; safe for production smoke (no game or points are written).
 """
 import os
+import re
 import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, expect
@@ -16,6 +17,9 @@ GAME = dict(id='00000000-0000-4000-8000-000000000001', stars=[], lives=3,
                         regions=[[r]*6 for r in range(6)]))
 HINT = dict(technique='残り1マス', points=1, explanation='この行で星を置ける候補は1マスです。',
             source_cells=[[0, 0], [0, 1]], target_cells=[[0, 2]], action='star')
+CROSS_HINT = dict(technique='shape_exclusion', points=10, explanation='どの候補に星を置いても対象マスには置けません。',
+                  source_cells=[[4, 0], [4, 1]], target_cells=[[3, 0], [3, 1]], action='cross')
+OTHER_CROSS_HINT = {**CROSS_HINT, 'source_cells': [[2, 4], [2, 5]], 'target_cells': [[1, 4], [1, 5]]}
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -43,6 +47,9 @@ with sync_playwright() as p:
                     route.abort()
                 elif state['mode'] == 'empty':
                     route.fulfill(status=409, json=dict(detail='ヒントの残り回数がありません。'))
+                elif state['mode'] in ('cross', 'other_cross'):
+                    hint = CROSS_HINT if state['mode'] == 'cross' else OTHER_CROSS_HINT
+                    route.fulfill(json=dict(hint=hint, balance=state['balance']))
                 elif state['mode'] == 'invalid':
                     route.fulfill(status=422, json=dict(detail='×メモに矛盾があります。ヒントは消費しません。'))
                 else:
@@ -70,6 +77,12 @@ with sync_playwright() as p:
         expect(page.locator('#hint-message')).to_contain_text('1行3列に星を置けます')
         expect(page.locator('.hint-source')).to_have_count(2)
         expect(page.locator('.hint-target')).to_have_count(1)
+        # Each preview looks like the entry it suggests: a pale star here,
+        # dotted stars for the supporting candidates.
+        expect(page.locator('.cell').nth(2)).to_have_class(re.compile(r'\bhint-star\b'))
+        expect(page.locator('.hint-candidate')).to_have_count(2)
+        expect(page.locator('.hint-cross')).to_have_count(0)
+        expect(page.locator('#hint-legend')).to_be_visible()
         expect(page.locator('.cell').nth(2)).to_have_text('')
         expect(page.locator('#hint-balance')).to_have_text('残り 9 回')
         assert attempts[0]['crosses'] == []
@@ -113,6 +126,33 @@ with sync_playwright() as p:
         expect(page.locator('#hint-balance')).to_have_text('残り 3 回')
         expect(page.locator('#hint')).to_be_enabled()
         assert me_requests.count('me') == launch_count+1
+        # Cross previews stay until each target is entered, then become real marks.
+        state['mode'] = 'cross'
+        page.locator('#hint').click()
+        expect(page.locator('.hint-cross')).to_have_count(2)
+        expect(page.locator('.hint-candidate')).to_have_count(2)
+        expect(page.locator('.hint-star')).to_have_count(0)
+        page.locator('.cell').nth(18).click()
+        expect(page.locator('.cell').nth(18)).to_have_text('×')
+        expect(page.locator('.cell').nth(18)).not_to_have_class(re.compile(r'\bhint-cross\b'))
+        expect(page.locator('.hint-cross')).to_have_count(1)
+        expect(page.locator('#hint-message')).to_contain_text('4行1列、4行2列に×を付けられます')
+        page.locator('.cell').nth(19).click()
+        expect(page.locator('.cell').nth(19)).to_have_text('×')
+        expect(page.locator('.hint-cross')).to_have_count(0)
+        expect(page.locator('.hint-candidate')).to_have_count(0)
+        expect(page.locator('#hint-message')).to_have_text('ヒントの一手を入力しました。')
+        page.clock.fast_forward(1000)
+        page.locator('.cell').nth(30).click()
+        expect(page.locator('#hint-message')).to_contain_text('根拠と次の一手を示します')
+        # An unrelated memo while a cross hint is shown clears every preview.
+        state['mode'] = 'other_cross'
+        page.locator('#hint').click()
+        expect(page.locator('.hint-cross')).to_have_count(2)
+        page.clock.fast_forward(1000)
+        page.locator('.cell').nth(35).click()
+        expect(page.locator('.hint-cross')).to_have_count(0)
+        expect(page.locator('.hint-candidate')).to_have_count(0)
         assert not errors, errors
         Path('artifacts').mkdir(exist_ok=True)
         page.screenshot(path=f'artifacts/hints-ui-{width}.png', full_page=True)

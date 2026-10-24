@@ -50,7 +50,7 @@ with sync_playwright() as p:
     a.locator('#password-confirm').fill(password)
     a.locator('#account-submit').click()
     expect(a.locator('#account-dialog')).not_to_be_visible()
-    expect(a.locator('.cell').nth(0)).to_have_text('⚑')
+    expect(a.locator('.cell').nth(0).locator('.flag')).to_have_count(1)
     a.wait_for_function("game.memo_revision>0")
     assert a.request.get(BASE+'/api/me').json()['id']==identity
     assert a.request.get(BASE+'/api/me').json()['points']==0
@@ -61,15 +61,15 @@ with sync_playwright() as p:
     b.locator('#account-password').fill(password)
     b.locator('#account-submit').click()
     expect(b.locator('.cell')).to_have_count(36)
-    expect(b.locator('.cell').nth(0)).to_have_text('⚑')
+    expect(b.locator('.cell').nth(0).locator('.flag')).to_have_count(1)
     expect(b.locator('.cell').nth(1)).to_have_text('×')
     assert b.request.get(BASE+'/api/me').json()['id']==identity
     assert b.request.get(BASE+'/api/games/current').json()['id']==original['id']
     # Edits from a different device survive refresh on the first.
     flag(b,2);b.wait_for_timeout(650)
     a.reload()
-    expect(a.locator('.cell').nth(2)).to_have_text('⚑')
-    expect(a.locator('.cell').nth(0)).to_have_text('⚑')
+    expect(a.locator('.cell').nth(2).locator('.flag')).to_have_count(1)
+    expect(a.locator('.cell').nth(0).locator('.flag')).to_have_count(1)
     # Offline local changes are merged with unrelated changes on the other device.
     first.set_offline(True)
     flag(a,3)
@@ -78,7 +78,7 @@ with sync_playwright() as p:
     a.evaluate("window.dispatchEvent(new Event('online'))")
     a.wait_for_timeout(1000)
     b.reload()
-    expect(b.locator('.cell').nth(3)).to_have_text('⚑')
+    expect(b.locator('.cell').nth(3).locator('.flag')).to_have_count(1)
     expect(b.locator('.cell').nth(4)).to_have_text('×')
     # Get the same share URL that the UI displays and open it anonymously.
     # A native share implementation must not hide the URL dialog.
