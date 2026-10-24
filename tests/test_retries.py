@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 import main
-from models import Clear, Game
+from models import Clear, Game, ReplayResult
 from puzzle_engine import solutions
 from test_app import client, register, start, star, solved
 
@@ -37,21 +37,50 @@ def test_retry_chain_is_authoritative_resumable_and_never_awards_points(client):
     assert result['player']['points']==0
     official=client.get('/api/clears/'+result['game']['clear_id']).json()
     assert official['retries']==2 and official['points']==0
-    assert client.post('/api/games/'+second['id']+'/retry',json={}).status_code==409
+    assert client.post('/api/games/'+second['id']+'/retry',json={}).json()['retries']==3
     assert client.get('/api/me').json()['points']==0
     for period in ['all','daily']:
         assert client.get('/api/ranking?period='+period).json()[0]['points']==0
     with Session(main.engine) as session:
-        assert len(session.scalars(select(Game)).all())==3
+        assert len(session.scalars(select(Game)).all())==4
         assert len(session.scalars(select(Clear)).all())==1
 
 
-def test_initial_clear_keeps_points_and_cannot_be_retried_or_overwritten(client):
+def test_initial_clear_keeps_points_and_replay_has_own_authoritative_result(client):
     register(client)
     game=start(client)
     result=solved(client,game)
     assert result['game']['score']==3
-    assert client.post('/api/games/'+game['id']+'/retry',json={}).status_code==409
+    original_id=result['game']['clear_id']
+    original=client.get('/api/clears/'+original_id).json()
+    replay=client.post('/api/games/'+game['id']+'/retry',json={}).json()
+    assert not replay['completed'] and replay['stars']==[] and replay['retries']==1
+    assert replay['score']==0 and replay['clear_id'] is None
+    # The old clear must not block hints or make the fresh trial terminal.
+    hint=client.post('/api/hints',json={'game_id':replay['id'],'request_id':str(uuid.uuid4()),'crosses':[]})
+    assert hint.status_code==200, hint.text
+    assert client.post('/api/games/'+game['id']+'/retry',json={}).json()['id']==replay['id']
+    with Session(main.engine) as session:
+        attempt=session.get(Game,replay['id']);attempt.started_at-=42;session.commit()
+    replay_result=solved(client,replay)
+    assert replay_result['game']['completed'] and replay_result['game']['score']==0
+    assert replay_result['game']['clear_id']!=original_id and replay_result['game']['seconds']>=42
+    replay_id=replay_result['game']['clear_id']
+    shared=client.get('/api/clears/'+replay_id).json()
+    assert shared['points']==0 and shared['retries']==1 and shared['seconds']==replay_result['game']['seconds']
+    assert set(shared)==set(original)
+    assert client.get('/api/clears/'+original_id).json()==original
+    assert client.get('/api/me').json()['streaks']['easy']==1
+    reopened=client.post('/api/games',json={'request_id':str(uuid.uuid4()),'puzzle_id':game['puzzle']['id']}).json()
+    assert reopened['id']==replay['id'] and reopened['clear_id']==replay_id
+    again=client.post('/api/games/'+replay['id']+'/retry',json={}).json()
+    assert again['retries']==2 and not again['completed']
+    assert client.post('/api/games/'+replay['id']+'/retry',json={}).json()['id']==again['id']
+    solved(client,again)
+    assert client.get('/api/me').json()['streaks']['easy']==1
+    with Session(main.engine) as session:
+        assert len(session.scalars(select(Clear)).all())==1
+        assert len(session.scalars(select(ReplayResult)).all())==2
     assert client.get('/api/clears/'+result['game']['clear_id']).json()['retries']==0
     assert client.get('/api/me').json()['points']==3
     with TestClient(main.app) as other:

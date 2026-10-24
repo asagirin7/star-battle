@@ -41,7 +41,31 @@ with sync_playwright() as p:
         assert page.request.get(BASE+'/api/me').json()['points']==0
         viewer=browser.new_page();viewer.goto(url+'&retries=0&points=999')
         expect(viewer.locator('#shared-result')).to_contain_text('0pt・リトライ1回')
+        # A successful attempt can be explicitly replayed too. The first
+        # result link remains immutable and the new completion has its own ID.
+        first_url=url
+        page.locator('#close-share').click()
+        expect(page.locator('#overlay-retry')).to_be_visible()
+        board=page.locator('#board').bounding_box()
+        for selector in ['#overlay-next','#overlay-retry','#overlay-share']:
+            bounds=page.locator(selector).bounding_box()
+            assert board['x']<=bounds['x'] and bounds['x']+bounds['width']<=board['x']+board['width']
+            assert board['y']<=bounds['y'] and bounds['y']+bounds['height']<=board['y']+board['height'], (width, selector,board,bounds)
+        page.locator('#overlay-retry').click()
+        expect(page.locator('#status')).to_contain_text('リトライ2回')
+        live=page.request.get(BASE+'/api/games/current?difficulty=expert').json()
+        assert live['retries']==2 and not live['completed'] and not live['stars']
+        page.reload();expect(page.locator('.cell')).to_have_count(81)
+        for row,col in enumerate(cols):
+            page.locator('.cell').nth(row*9+col).click(button='right')
+            expect(page.locator('.cell.locked')).to_have_count(row+1)
+        page.locator('#overlay-share').click()
+        expect(page.locator('#result-share-text')).to_be_visible()
+        assert '0pt・リトライ2回' in page.locator('#result-share-text').input_value()
+        assert page.locator('#share-url').input_value()!=first_url
+        assert page.request.get(BASE+'/api/me').json()['points']==0
+        assert page.request.get(BASE+'/api/me').json()['streaks']['expert']==1
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
         viewer.close();ctx.close()
     browser.close()
-print('PASS: shared game over → explicit retry → reload → zero-point clear → authoritative retry-count sharing at320/390')
+print('PASS: shared game over → retry → clear → successful-board replay → zero-point result sharing at320/390')

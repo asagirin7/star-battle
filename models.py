@@ -44,6 +44,15 @@ class Clear(Base):
     cleared_at: Mapped[float] = mapped_column(Float, default=time.time, index=True)
 
 
+class ReplayResult(Base):
+    """Completed practice attempts; excluded from points and unique-board wins."""
+    __tablename__ = 'replay_results'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    game_id: Mapped[str] = mapped_column(ForeignKey('games.id'), unique=True)
+    seconds: Mapped[int]
+    cleared_at: Mapped[float] = mapped_column(Float, default=time.time)
+
+
 class Puzzle(Base):
     __tablename__ = 'puzzles'
     id: Mapped[str] = mapped_column(String(32), primary_key=True)

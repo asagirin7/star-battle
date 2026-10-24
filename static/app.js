@@ -333,8 +333,8 @@ function render() {
   result.hidden=!(game.completed||game.game_over)||dismissedResults.has(game.id);
   $('#dismiss-result').hidden=!game.game_over;
   $('#overlay-share').hidden=!game.completed;
-  $('#retry-board').hidden=!game.game_over||game.completed;
-  $('#overlay-retry').hidden=!game.game_over||game.completed;
+  $('#retry-board').hidden=!(game.game_over||game.completed);
+  $('#overlay-retry').hidden=!(game.game_over||game.completed);
   result.classList.toggle('cleared',game.completed);
   text($('#result-title'),game.completed?'クリア！ ✦':'ゲームオーバー');
   text($('#result-message'),game.completed?rewardMessage():'次の盤面で、もう一度。');
@@ -431,7 +431,7 @@ $('#dismiss-result').onclick=()=>{
   $('#advance').focus({preventScroll:true});
 };
 async function retryBoard(){
-  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length||!game?.game_over)return;
+  if(busy||hintLoading||launchRefreshing||sending||moveQueue.length||!(game?.game_over||game?.completed))return;
   busy=true;controls();
   try{
     await flushMemos();

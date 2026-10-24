@@ -4,7 +4,7 @@ import hashlib
 import secrets
 import time
 from sqlalchemy import func, select, update
-from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, PlayerMerge, Puzzle
+from models import Account, Clear, Game, GameMemo, LoginSession, Move, Player, PlayerMerge, Puzzle, ReplayResult
 
 
 def summary(session, p):
@@ -72,6 +72,10 @@ def consolidate(session, username, source_id, expected_target_id, expected_sourc
         for clear in entries:
             if clear is not winner:
                 removed.append(clear.id)
+                # Dedup awards, while preserving the old attempt's completion
+                # and public result URL after ownership moves to the account.
+                session.add(ReplayResult(id=clear.id,game_id=clear.game_id,
+                                         seconds=clear.seconds,cleared_at=clear.cleared_at))
                 session.delete(clear)
     session.flush()
     for clear in clears:

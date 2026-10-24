@@ -97,3 +97,25 @@ def test_relaxed_history_changes_to_50_without_affecting_other_modes(tmp_path):
     alembic('downgrade','004')
     with sqlite3.connect(path) as db:
         assert db.execute('SELECT points FROM clears ORDER BY id').fetchall()==[(100,),(0,),(100,),(9,)]
+
+
+def test_practice_upgrade_restores_merged_completion_without_points(tmp_path):
+    import json
+    path=tmp_path/'replay.db'
+    env={**os.environ,'DATABASE_URL':f'sqlite:///{path}'}
+    def alembic(*args):
+        subprocess.run([sys.executable,'-m','alembic',*args],env=env,cwd=ROOT,check=True,capture_output=True)
+    alembic('upgrade','011')
+    with sqlite3.connect(path) as db:
+        db.executemany('INSERT INTO players VALUES (?,?,?)', [('source','a','old'),('target','b','new')])
+        db.execute("INSERT INTO games(id,player_id,puzzle_id,started_at) VALUES ('oldgame','target','legacy',1)")
+        backup={'clears':[dict(id='oldclear',game_id='oldgame',seconds=42,cleared_at=12.0)]}
+        db.execute('INSERT INTO player_merges VALUES (?,?,?,?)',('source','target',13,json.dumps(backup)))
+    alembic('upgrade','head')
+    alembic('check')
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT * FROM replay_results').fetchall()==[('oldclear','oldgame',42,12.0)]
+        assert db.execute('SELECT count(*) FROM clears').fetchone()[0]==0
+    alembic('upgrade','head')
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT count(*) FROM replay_results').fetchone()[0]==1

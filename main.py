@@ -21,7 +21,7 @@ from hint_wallet import wallet_for_launch
 from hint_engine import next_hint
 from streaks import derive_streaks
 from config import database_url
-from models import Account, Clear, Game, GameMemo, HintUse, HintWallet, LoginSession, Move, Player, PlayerMerge, Puzzle
+from models import Account, Clear, Game, GameMemo, HintUse, HintWallet, LoginSession, Move, Player, PlayerMerge, Puzzle, ReplayResult
 from authentication import DUMMY_HASH, issue_session, password_hash, password_matches, throttle
 from puzzle_engine import (
     LEVELS, InvalidPuzzle, certify_generated, checked_solution, clear_points,
@@ -261,16 +261,18 @@ def verify_game(session, game):
 def game_view(session, game):
     puzzle,moves = verify_game(session,game)
     stars = {(m.row,m.col) for m in moves if m.correct}
-    clear = session.scalar(select(Clear).where(Clear.player_id == game.player_id, Clear.puzzle_id == game.puzzle_id))
+    clear = session.scalar(select(Clear).where(Clear.game_id == game.id))
+    replay = session.scalar(select(ReplayResult).where(ReplayResult.game_id == game.id))
+    result = clear or replay
     memo = session.get(GameMemo, game.id)
     return dict(id=game.id, started_at=game.started_at, puzzle=puzzle_view(puzzle),
                 memos=memo.cells if memo else None, memo_revision=memo.revision if memo else 0,
                 stars=sorted(stars), mistakes=game.mistakes,
                 lives=max(0, life_limit(puzzle.size)-game.mistakes),
-                completed=clear is not None, score=clear.points if clear and clear.game_id==game.id else 0,
-                clear_id=clear.id if clear else None,
+                completed=result is not None, score=clear.points if clear else 0,
+                clear_id=result.id if result else None,
                 retries=game.retry_count,
-                seconds=(clear.seconds if clear else max(0, int((game.finished_at or time.time())-game.started_at))),
+                seconds=(result.seconds if result else max(0, int((game.finished_at or time.time())-game.started_at))),
                 game_over=game.mistakes >= life_limit(puzzle.size))
 
 
@@ -382,7 +384,7 @@ def retry_game(game_id: str, p: Player = Depends(player), session: Session = Dep
     game = owned_game(session,game_id,p.id)
     session.execute(update(Game).where(Game.id==game.id).values(move_revision=Game.move_revision+1))
     session.refresh(game)
-    # A retry belongs to its failed source, not the device or HTTP request ID.
+    # A retry belongs to its terminal source, not the device or HTTP request ID.
     # Both concurrent devices and a delayed duplicate return the same successor.
     existing=session.scalar(select(Game).where(Game.retry_of==game.id))
     if existing:
@@ -390,8 +392,8 @@ def retry_game(game_id: str, p: Player = Depends(player), session: Session = Dep
         session.commit()
         return result
     state=game_view(session,game)
-    if state['completed'] or not state['game_over']:
-        raise HTTPException(409,'ゲームオーバーの盤面だけリトライできます。')
+    if not (state['completed'] or state['game_over']):
+        raise HTTPException(409,'終了した盤面だけリトライできます。')
     count=session.scalar(select(func.max(Game.retry_count)).where(
         Game.player_id==p.id,Game.puzzle_id==game.puzzle_id)) or 0
     session.execute(update(Game).where(Game.player_id==p.id,Game.puzzle_id.in_(
@@ -505,6 +507,19 @@ def shared_clear(clear_id: str, session: Session = Depends(db)):
     except ValueError:
         raise HTTPException(404, '共有されたクリア結果が見つかりません。')
     clear=session.get(Clear,clear_id)
+    replay=session.get(ReplayResult,clear_id) if not clear else None
+    if replay:
+        game=session.get(Game,replay.game_id)
+        puzzle=session.get(Puzzle,game.puzzle_id) if game else None
+        owner=session.get(Player,game.player_id) if game else None
+        if not game or not puzzle or not owner:
+            raise HTTPException(404, '共有されたクリア結果が見つかりません。')
+        try:
+            checked_solution(puzzle.regions)
+        except InvalidPuzzle:
+            raise HTTPException(404, 'このクリア結果は現在共有できません。')
+        return dict(id=replay.id,name=owner.name,seconds=replay.seconds,points=0,retries=game.retry_count,
+                    cleared_at=replay.cleared_at,puzzle=puzzle_view(puzzle))
     puzzle=session.get(Puzzle,clear.puzzle_id) if clear else None
     owner=session.get(Player,clear.player_id) if clear else None
     if not clear or not puzzle or not owner:
@@ -573,10 +588,14 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
             stars.add((body.row, body.col))
         if valid_stars(puzzle.regions,stars,complete=True):
             game.finished_at = time.time()
-            session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
-                              points=0 if game.retry_count else clear_points(puzzle.size, game.mistakes, puzzle.difficulty),
-                              retry_count=game.retry_count,mistakes=game.mistakes,
-                              seconds=max(0, int(time.time()-game.started_at))))
+            seconds=max(0, int(game.finished_at-game.started_at))
+            prior_clear=session.scalar(select(Clear).where(Clear.player_id==p.id,Clear.puzzle_id==puzzle.id))
+            if prior_clear:
+                session.add(ReplayResult(game_id=game.id,seconds=seconds))
+            else:
+                session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
+                                  points=0 if game.retry_count else clear_points(puzzle.size, game.mistakes, puzzle.difficulty),
+                                  retry_count=game.retry_count,mistakes=game.mistakes,seconds=seconds))
     session.commit()
     return dict(correct=bool(previous.correct and correct) if previous else correct,
                 game=game_view(session, game), player=stats(session, p))
