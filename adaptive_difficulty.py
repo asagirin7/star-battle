@@ -70,7 +70,7 @@ def choose_candidate(candidates, scores, streak, rng=None):
 
 def difficulty_rating(regions):
     """Provisional five ranks for normal 9x9 rule scores."""
-    score = score_regions(regions, deadline=time.monotonic() + .4)
+    score = score_regions(regions, deadline=time.monotonic() + 3)
     if score is None:
         return None
     rank = next(label for ceiling, label in [(29, '入門'), (49, '初級'),
