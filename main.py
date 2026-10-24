@@ -453,9 +453,10 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
                                  .order_by(func.random()).limit(12))
         for item in stored:
             seed_expert(dict(size=item.size, difficulty=item.difficulty, regions=item.regions, solution=item.solution))
+    streak = derive_streaks(session, p.id)['expert'] if body.difficulty == 'expert' else 0
     for _ in range(5):
         try:
-            generated = certify_generated(generate(body.difficulty))
+            generated = certify_generated(generate(body.difficulty, streak=streak) if body.difficulty == 'expert' else generate(body.difficulty))
             if generated['difficulty'] != body.difficulty:
                 raise InvalidPuzzle('Mismatched difficulty')
         except InvalidPuzzle:

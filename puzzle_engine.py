@@ -7,6 +7,7 @@ import threading
 from functools import lru_cache
 from collections import deque
 from logic_solver import logical_result
+from adaptive_difficulty import score_regions, choose_candidate
 
 EXPERT_POINTS = 100
 RELAXED_POINTS = 50
@@ -257,7 +258,7 @@ _recent_families = {}
 _generation_counts = {}
 
 
-def vary_expert(seed, rng):
+def vary_expert(seed, rng, deadline=None):
     """Walk between unique boards, retaining connectivity and area constraints."""
     n = seed['size']
     difficulty = seed.get('difficulty','expert')
@@ -276,10 +277,14 @@ def vary_expert(seed, rng):
     changed = 0
     target_changes = rng.randint(3,8)
     for r,c in candidates:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         targets = list({regions[rr][cc] for rr,cc in [(r-1,c),(r+1,c),(r,c-1),(r,c+1)]
                         if 0 <= rr < n and 0 <= cc < n} - {regions[r][c]})
         rng.shuffle(targets)
         for target in targets:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             old = regions[r][c]
             regions[r][c] = target
             if valid_area(regions,old,relaxed) and valid_area(regions,target,relaxed) and (not relaxed or easier_clues(regions)) and len(solutions(regions)) == 1 and logical_result(regions).solved:
@@ -341,10 +346,11 @@ def seed_expert(puzzle):
             bank.append(puzzle)
 
 
-def generate(difficulty, rng=None, timeout=5):
+def generate(difficulty, rng=None, timeout=5, streak=0):
     if rng is not None or not difficulty.startswith('expert'):
         return certify_generated(_generate(difficulty,rng,timeout))
     rng = random.SystemRandom()
+    started = time.monotonic()
     with _expert_lock:
         bank = _expert_seeds.setdefault(difficulty,deque(maxlen=32))
         recent = _recent_families.setdefault(difficulty,deque(maxlen=6))
@@ -372,5 +378,32 @@ def generate(difficulty, rng=None, timeout=5):
         if result is None:
             result = certify_generated(_generate(difficulty,timeout=timeout))
         bank.append(result)
+        if difficulty == 'expert':
+            # Extra work shares the normal generation's original time budget.
+            # Unselected candidates are discarded, so selection changes the
+            # distribution, rather than merely reordering a mandatory queue.
+            deadline = min(started + timeout, time.monotonic() + .4)
+            fallback = result
+            candidates = [result]
+            initial_score = score_regions(result['regions'], deadline=deadline)
+            eligible = [result] if initial_score is not None else []
+            scores = [initial_score] if initial_score is not None else []
+            seeds = [item for item in bank
+                     if solution_family(item['solution']) not in recent
+                     and solution_family(item['solution']) != solution_family(result['solution'])]
+            rng.shuffle(seeds)
+            for seed in seeds:
+                if any(solution_family(seed['solution']) == solution_family(item['solution']) for item in candidates):
+                    continue
+                if len(candidates) >= 3 or time.monotonic() >= deadline:
+                    break
+                extra = vary_expert(seed, rng, deadline=deadline)
+                if extra is not None:
+                    candidates.append(extra)
+                    score = score_regions(extra['regions'], deadline=deadline)
+                    if score is not None:
+                        eligible.append(extra)
+                        scores.append(score)
+            result = choose_candidate(eligible, scores, streak, rng) if eligible else fallback
         recent.append(solution_family(result['solution']))
         return certify_generated(result)
