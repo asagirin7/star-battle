@@ -1,5 +1,6 @@
 """Exercise mobile/desktop generation, remaining lives, resume, and rankings."""
 import os
+import re
 import sys
 import time
 import uuid
@@ -177,9 +178,14 @@ with sync_playwright() as p:
         move(page,0,wrong,9)
         terminal(page,'ゲームオーバー')
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 1回')
+        # The star that ended the game stays on the finished board in red.
+        expect(page.locator('.cell.missed')).to_have_count(1)
+        expect(page.locator('.cell').nth(wrong)).to_have_class(re.compile(r'\bmissed\b'))
+        expect(page.locator('.cell').nth(wrong)).to_have_text('★')
         page.reload()
         terminal(page,'ゲームオーバー')
         expect(page.locator('.cell')).to_have_count(81)
+        expect(page.locator('.cell.missed')).to_have_count(1)
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 0、ミス 1回')
         assert page.locator('#expert-mode').count()==0
         # Legacy relaxed boards remain playable through existing/shared URLs.

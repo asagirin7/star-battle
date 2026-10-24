@@ -355,6 +355,8 @@ async function choose(next=false) {
 }
 function renderCell(button,i) {
   const r=Math.floor(i/puzzle.size),c=i%puzzle.size,value=visibleValue(i),pending=value!==1&&waiting(i);
+  const miss=value!==1&&Boolean(game.game_over&&game.misses?.some(([row,col])=>row===r&&col===c));
+  button.classList.toggle('missed',miss);
   button.classList.toggle('locked',value===1);
   const marks=currentHintMarks,source=marks.candidate.has(i)||marks.sourceStar.has(i),target=marks.cross.has(i)||marks.star.has(i);
   button.classList.toggle('hint-source',source);
@@ -365,12 +367,12 @@ function renderCell(button,i) {
   button.classList.toggle('hint-source-star',marks.sourceStar.has(i));
   button.classList.toggle('pending',pending);
   button.classList.toggle('marked',value===2&&!pending);
-  const glyph=value===1||pending?'★':value===2?'×':'';
+  const glyph=value===1||pending||miss?'★':value===2?'×':'';
   const mark=button.firstElementChild;
   if(mark.textContent!==glyph)mark.textContent=glyph;
-  const markClass=value===2&&!pending?'mark':value===3&&!pending?'flag':'';
+  const markClass=miss?'':value===2&&!pending?'mark':value===3&&!pending?'flag':'';
   if(mark.className!==markClass)mark.className=markClass;
-  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':pending?'星を確認中':value===2?'除外':value===3?'旗':'空白'}${marks.candidate.has(i)?'、ヒントの根拠になる星の候補':marks.sourceStar.has(i)?'、ヒントの根拠になる星':''}${marks.cross.has(i)?'、ヒント：×を付けられる':marks.star.has(i)?'、ヒント：星を置ける':''}`);
+  attribute(button,'aria-label',`${r+1}行${c+1}列、エリア${puzzle.regions[r][c]+1}、${value===1?'確定した星':miss?'ミスした星':pending?'星を確認中':value===2?'除外':value===3?'旗':'空白'}${marks.candidate.has(i)?'、ヒントの根拠になる星の候補':marks.sourceStar.has(i)?'、ヒントの根拠になる星':''}${marks.cross.has(i)?'、ヒント：×を付けられる':marks.star.has(i)?'、ヒント：星を置ける':''}`);
 }
 function render() {
   if(!puzzle)return;

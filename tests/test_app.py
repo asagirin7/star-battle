@@ -103,6 +103,19 @@ def test_remaining_lives_are_score(client, mistakes, remaining, level, factor):
     assert history[0]['points']==expected
 
 
+def test_misses_are_revealed_only_after_game_over(client):
+    register(client)
+    game=start(client)
+    answer=solutions(game['puzzle']['regions'])[0]
+    wrong=[c for c in range(game['puzzle']['size']) if c!=answer[0]][:3]
+    for i,col in enumerate(wrong):
+        result=star(client,game,0,col)
+        assert result['game']['misses']==([] if i<2 else [[0,c] for c in sorted(wrong)])
+    assert client.get('/api/games/'+game['id']).json()['misses']==[[0,c] for c in sorted(wrong)]
+    retry=client.post('/api/games/'+game['id']+'/retry',json={}).json()
+    assert retry['misses']==[]
+
+
 def test_game_over_persists_and_cannot_award(client):
     register(client)
     game=start(client)

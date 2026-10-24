@@ -267,6 +267,7 @@ def game_view(session, game):
     replay = session.scalar(select(ReplayResult).where(ReplayResult.game_id == game.id))
     result = clear or replay
     memo = session.get(GameMemo, game.id)
+    game_over = game.mistakes >= life_limit(puzzle.size)
     return dict(id=game.id, started_at=game.started_at, puzzle=puzzle_view(puzzle),
                 memos=memo.cells if memo else None, memo_revision=memo.revision if memo else 0,
                 stars=sorted(stars), mistakes=game.mistakes,
@@ -275,7 +276,9 @@ def game_view(session, game):
                 clear_id=result.id if result else None,
                 retries=game.retry_count,
                 seconds=(result.seconds if result else max(0, int((game.finished_at or time.time())-game.started_at))),
-                game_over=game.mistakes >= life_limit(puzzle.size))
+                game_over=game_over,
+                # Shown on the finished board so a player can see which star ended it.
+                misses=sorted({(m.row,m.col) for m in moves if not m.correct}) if game_over else [])
 
 
 @app.get('/api/games/current')
