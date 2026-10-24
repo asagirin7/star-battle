@@ -88,6 +88,10 @@ with sync_playwright() as p:
         for i in range(6,12):expect(page.locator('.cell').nth(i)).to_have_text('')
         # Keyboard undo can scroll only by user focus; return to the board before comparing.
         stable(page,before)
+        # The on-screen undo button works on phones without a keyboard.
+        tap(13);expect(page.locator('.cell').nth(13)).to_have_text('×')
+        page.wait_for_timeout(400)
+        page.locator('#undo').click();expect(page.locator('.cell').nth(13)).to_have_text('')
         stroke(6,11);stroke(6,11)
         for i in range(6,12):expect(page.locator('.cell').nth(i)).to_have_text('')
         stroke(12,17,cancel=True)

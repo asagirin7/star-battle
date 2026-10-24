@@ -329,6 +329,7 @@ function controls() {
   const changing=busy||hintLoading||launchRefreshing||sending||moveQueue.length>0;
   for(const selector of ['#retry-board','#overlay-retry','#advance','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
   disabled($('#hint'),changing||ended()||!me||!(me.hints>0));
+  disabled($('#undo'),busy||hintLoading||launchRefreshing||ended()||!undo.length);
   disabled($('#auto-cross'),hintLoading);
   $('#retry-moves').hidden=!moveQueue.length||sending;
 }
@@ -527,6 +528,7 @@ function undoMemo(){
   if(busy||hintLoading||launchRefreshing||!undo.length||ended())return;
   input.reset();restoreMemos(undo.pop());save();render();
 }
+$('#undo').onclick=undoMemo;
 document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.target.closest('input,textarea,[contenteditable]')){event.preventDefault();undoMemo();}
 });

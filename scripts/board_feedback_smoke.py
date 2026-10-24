@@ -16,7 +16,8 @@ with sync_playwright() as p:
   page=context.new_page();errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
   page.goto(BASE);page.locator('#name').fill(f'音と色{width}');page.get_by_role('button',name='この名前ではじめる').click()
   expect(page.locator('.cell')).to_have_count(36)
-  assert page.locator('#undo,#reset').count()==0
+  assert page.locator('#reset').count()==0
+  expect(page.locator('#undo')).to_be_disabled()
   expect(page.locator('.region-chip')).to_have_count(6)
   assert page.locator('.region-chip.placed').count()==0
   page.locator('.cell').first.click();expect(page.locator('.cell').first).to_have_text('×')
