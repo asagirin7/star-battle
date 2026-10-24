@@ -51,7 +51,13 @@ with sync_playwright() as p:
     a.locator('#account-submit').click()
     expect(a.locator('#account-dialog')).not_to_be_visible()
     expect(a.locator('.cell').nth(0).locator('.flag')).to_have_count(1)
-    a.wait_for_function("game.memo_revision>0")
+    # wait_for_function polls with eval, which this app's CSP blocks.
+    for _ in range(200):
+        if a.evaluate("game.memo_revision>0"):
+            break
+        a.wait_for_timeout(50)
+    else:
+        raise AssertionError('memo revision was not saved')
     assert a.request.get(BASE+'/api/me').json()['id']==identity
     assert a.request.get(BASE+'/api/me').json()['points']==0
     assert a.request.get(BASE+'/api/games/'+medium['id']).json()['memos'][48]==3
