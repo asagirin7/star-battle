@@ -88,11 +88,26 @@ def choose_candidate(candidates, scores, streak, rng=None):
         candidates, weights=candidate_weights(scores, streak), k=1)[0]
 
 
+# No-miss clear points of a normal 9x9 board by rank.
+RANK_POINTS = {'入門': 100, '初級': 150, '中級': 200, '上級': 250, '達人': 300}
+UNRATED_POINTS = 100
+
+
+def rank_for(score):
+    return next(label for ceiling, label in [(29, '入門'), (49, '初級'),
+                (69, '中級'), (MASTER_SCORE-1, '上級'), (float('inf'), '達人')] if score <= ceiling)
+
+
 def difficulty_rating(regions):
     """Provisional five ranks for normal 9x9 rule scores."""
     score = score_regions(regions, deadline=time.monotonic() + 3)
     if score is None:
         return None
-    rank = next(label for ceiling, label in [(29, '入門'), (49, '初級'),
-                (69, '中級'), (MASTER_SCORE-1, '上級'), (float('inf'), '達人')] if score <= ceiling)
-    return {'rank': rank, 'score': score}
+    return {'rank': rank_for(score), 'score': score}
+
+
+def rated_points(regions):
+    """Clear points from the complete rule score, without a time budget, so
+    the award never depends on server load."""
+    score = score_regions(regions)
+    return UNRATED_POINTS if score is None else RANK_POINTS[rank_for(score)]

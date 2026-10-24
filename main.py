@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from special_boards import load_boards
 from hint_wallet import wallet_for_launch
 from hint_engine import next_hint
-from adaptive_difficulty import difficulty_rating
+from adaptive_difficulty import difficulty_rating, rated_points
 from streaks import derive_streaks
 from config import database_url
 from models import Account, Clear, Game, GameMemo, HintUse, HintWallet, LoginSession, Move, Player, PlayerMerge, Puzzle, ReplayResult
@@ -221,9 +221,15 @@ def me(launch: bool = True, p: Player = Depends(player), session: Session = Depe
     return launch_stats(session, p) if launch else stats(session,p)
 
 
+def puzzle_points(puzzle, mistakes=0):
+    """Normal 9x9 boards pay by difficulty rank; other boards by the level rule."""
+    points = clear_points(puzzle.size, mistakes, puzzle.difficulty)
+    return rated_points(puzzle.regions) if points and puzzle.difficulty == 'expert' else points
+
+
 def puzzle_view(puzzle):
     return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
-                points=clear_points(puzzle.size, 0, puzzle.difficulty), multiplier=multiplier(puzzle.size),
+                points=puzzle_points(puzzle), multiplier=multiplier(puzzle.size),
                 difficulty_rating=difficulty_rating(puzzle.regions) if puzzle.difficulty == 'expert' else None,
                 initial_lives=life_limit(puzzle.size), scoring='fixed' if puzzle.size == 9 else 'lives', regions=puzzle.regions)
 
@@ -600,7 +606,7 @@ def place_star(game_id: str, body: StarAttempt, p: Player = Depends(player), ses
                 session.add(ReplayResult(game_id=game.id,seconds=seconds))
             else:
                 session.add(Clear(player_id=p.id, puzzle_id=puzzle.id, game_id=game.id,
-                                  points=0 if game.retry_count else clear_points(puzzle.size, game.mistakes, puzzle.difficulty),
+                                  points=0 if game.retry_count else puzzle_points(puzzle, game.mistakes),
                                   retry_count=game.retry_count,mistakes=game.mistakes,seconds=seconds))
     session.commit()
     return dict(correct=bool(previous.correct and correct) if previous else correct,

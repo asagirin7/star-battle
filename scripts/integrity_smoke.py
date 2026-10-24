@@ -32,7 +32,8 @@ with httpx.Client(base_url=BASE_URL,timeout=30) as client:
             response.raise_for_status()
             game=response.json()
             assert 'solution' not in game['puzzle']
-            assert game['puzzle']['size']==n and game['puzzle']['points']==points
+            # Normal 9x9 pays 100-300 by difficulty rank.
+            assert game['puzzle']['size']==n and (game['puzzle']['points'] in (100,150,200,250,300) if level=='expert' else game['puzzle']['points']==points)
             found=independent_solutions(game['puzzle']['regions'])
             assert len(found)==1,(level,game['puzzle']['id'],len(found))
             cols=found[0]

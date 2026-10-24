@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import main
+from adaptive_difficulty import RANK_POINTS
 from models import Base, Game, Puzzle
 from puzzle_engine import fingerprint, generate, solutions, LEVELS
 
@@ -220,11 +221,13 @@ def test_asset_urls_change_with_content_and_revalidate(client):
 
 @pytest.mark.parametrize('level',['expert','expert_relaxed'])
 def test_expert_one_mistake_fails_and_clear_has_mode_score(client,level):
-    expected=50 if level=='expert_relaxed' else 100
     register(client)
     game=start(client,level)
     assert game['lives']==game['puzzle']['initial_lives']==1
-    assert game['puzzle']['points']==expected
+    if level=='expert_relaxed':
+        assert game['puzzle']['points']==50
+    else:
+        assert game['puzzle']['points']==RANK_POINTS[game['puzzle']['difficulty_rating']['rank']]
     assert game['puzzle']['scoring']=='fixed'
     assert game['puzzle']['multiplier'] is None
     request_id=nonce()
@@ -238,6 +241,7 @@ def test_expert_one_mistake_fails_and_clear_has_mode_score(client,level):
     assert result['player']['points']==0
     fresh=start(client,level)
     assert fresh['lives']==1
+    expected=fresh['puzzle']['points']
     result=solved(client,fresh)
     assert result['game']['completed'] and result['game']['score']==expected
     assert result['player']['points']==expected

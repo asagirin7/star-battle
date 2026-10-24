@@ -166,3 +166,39 @@ def test_five_rating_boundaries(monkeypatch):
         assert adaptive.difficulty_rating([]) == {'rank':rank,'score':score}
     monkeypatch.setattr(adaptive, 'score_regions', lambda *a, **kw: None)
     assert adaptive.difficulty_rating([]) is None
+
+
+def test_rank_points_follow_complete_score(monkeypatch):
+    for score, points in [(0,100),(29,100),(30,150),(50,200),(70,250),(89,250),(90,300),(130,300)]:
+        monkeypatch.setattr(adaptive, 'score_regions', lambda *a, **kw: score)
+        assert adaptive.rated_points([]) == points
+    monkeypatch.setattr(adaptive, 'score_regions', lambda *a, **kw: None)
+    assert adaptive.rated_points([]) == 100
+
+
+def test_expert_clear_awards_rank_points(monkeypatch):
+    import uuid
+    import main
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from sqlalchemy.pool import StaticPool
+    from models import Base, Puzzle
+    database = create_engine('sqlite://', connect_args={'check_same_thread':False}, poolclass=StaticPool)
+    Base.metadata.create_all(database)
+    monkeypatch.setattr(main, 'engine', database)
+    sample = boards()[0]
+    with Session(database) as session:
+        session.add(Puzzle(id='e'*32, difficulty='expert', size=9, points=100, regions=sample['regions'],
+                           solution=sample['solution'], fingerprint=engine.fingerprint(sample['regions'])))
+        session.commit()
+    expected = adaptive.RANK_POINTS[adaptive.rank_for(adaptive.score_regions(sample['regions']))]
+    with TestClient(main.app) as client:
+        assert client.post('/api/profile', json={'name':'rank'}).status_code == 200
+        game = client.post('/api/games', json={'request_id':str(uuid.uuid4()),'puzzle_id':'e'*32}).json()
+        assert game['puzzle']['points'] == expected
+        for r, c in enumerate(sample['solution']):
+            result = client.post(f"/api/games/{game['id']}/stars", json={'row':r,'col':c,'request_id':str(uuid.uuid4())}).json()
+        assert result['game']['completed'] and result['game']['score'] == expected
+        assert client.get('/api/me').json()['points'] == expected
+    database.dispose()

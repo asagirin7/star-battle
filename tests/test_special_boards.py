@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import Session
 
+import adaptive_difficulty
 import main
 import special_boards
 from models import Base, Puzzle
@@ -59,7 +60,8 @@ def test_catalog_shared_play_and_official_clear(client):
     assert response.status_code==200
     game=response.json()
     result=solved(client,game)
-    assert result['game']['completed'] and result['game']['score']==100
+    assert result['game']['completed'] and result['game']['score']==game['puzzle']['points']
+    assert game['puzzle']['points']==adaptive_difficulty.RANK_POINTS[game['puzzle']['difficulty_rating']['rank']]
     official=client.get('/api/clears/'+result['game']['clear_id']).json()
     assert official['puzzle']['id']==boards[0]['id']
     assert 'palette' not in official['puzzle']

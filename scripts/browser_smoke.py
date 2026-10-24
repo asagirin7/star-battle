@@ -164,12 +164,13 @@ with sync_playwright() as p:
         expert=page.request.get(BASE_URL+'/api/games/current?difficulty=expert').json()
         assert expert['puzzle']['multiplier'] is None
         assert expert['lives']==1
-        assert expert['puzzle']['points']==100
+        reward=expert['puzzle']['points']
+        assert reward in (100,150,200,250,300)
         for r,c in enumerate(solutions(expert['puzzle']['regions'])[0]):move(page,r,c,9)
         expect(page.locator('.fixed-reward-label')).to_be_visible()
-        expect(page.locator('#reward-earned')).to_have_text('+100 pt')
+        expect(page.locator('#reward-earned')).to_have_text(f'+{reward} pt')
         terminal(page,'クリア！ ✦')
-        expect(page.locator('#total')).to_contain_text('105')
+        expect(page.locator('#total')).to_contain_text(str(5+reward))
         with page.expect_response(lambda response: response.url.endswith('/api/games') and response.request.method == 'POST') as fresh_pending:
             page.locator('#overlay-next').click()
         fresh=fresh_pending.value.json()
@@ -202,7 +203,7 @@ with sync_playwright() as p:
         for r,c in enumerate(solutions(areas)[0]):move(page,r,c,9)
         terminal(page,'クリア！ ✦')
         expect(page.locator('#result-message')).to_have_text('ノーミスクリア！ +50 pt')
-        expect(page.locator('#total')).to_contain_text('155')
+        expect(page.locator('#total')).to_contain_text(str(5+reward+50))
         page.reload()
         terminal(page,'クリア！ ✦')
         expect(page.locator('#puzzle-label')).to_contain_text('8 × 8相当')
