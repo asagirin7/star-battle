@@ -89,7 +89,7 @@ def test_shared_problem_is_public_but_attempts_scores_and_memos_are_private(clie
     with TestClient(main.app) as friend:
         public=friend.get('/api/puzzles/'+pid)
         assert public.status_code==200
-        assert set(public.json())=={'id','size','difficulty','points','multiplier','initial_lives','scoring','regions'}
+        assert set(public.json())=={'id','size','difficulty','points','multiplier','initial_lives','scoring','regions','difficulty_rating'}
         assert 'solution' not in public.text
         assert friend.get('/api/games/'+game['id']).status_code==401
         register(friend,'友達')
