@@ -30,6 +30,32 @@ def test_weights_are_soft_monotone_tie_and_order_invariant():
     assert means == sorted(means) and len(set(means)) == 4
 
 
+def test_master_boards_wait_for_ten_clear_streak():
+    rng = random.Random(3)
+    for streak in [0, 3, 9]:
+        assert {adaptive.choose_candidate(['a','b','c'], [40, 95, 120], streak, rng) for _ in range(300)} == {'a'}
+    assert 'c' in {adaptive.choose_candidate(['a','b','c'], [40, 95, 120], 10, rng) for _ in range(300)}
+    # With nothing easier available the board is still served.
+    assert adaptive.choose_candidate(['b'], [95], 0, rng) == 'b'
+
+
+def test_generator_looks_for_an_allowed_board_when_all_are_master(monkeypatch):
+    samples = boards()[:3]
+    monkeypatch.setattr(engine, '_expert_seeds', {'expert': engine.deque(samples, maxlen=32)})
+    monkeypatch.setattr(engine, '_recent_families', {})
+    monkeypatch.setattr(engine, '_generation_counts', {'expert':1})
+    monkeypatch.setattr(engine, 'vary_expert', lambda seed, rng, deadline=None: dict(seed, fingerprint=engine.fingerprint(seed['regions'])))
+    measured = []
+    def score(regions, deadline=None):
+        measured.append(regions)
+        return 100 if len(measured) <= 3 else 50
+    monkeypatch.setattr(engine, 'score_regions', score)
+    picked = []
+    monkeypatch.setattr(engine, 'choose_candidate', lambda c, s, streak, rng: picked.append(s) or c[-1])
+    engine.generate('expert', streak=3)
+    assert picked == [[100, 100, 100, 50]]
+
+
 def test_complete_score_does_not_read_stored_solution_and_budget_can_stop():
     regions = boards()[0]['regions']
     adaptive._scores.clear()

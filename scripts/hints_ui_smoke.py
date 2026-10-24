@@ -73,7 +73,7 @@ with sync_playwright() as p:
         expect(page.locator('.cell').nth(10)).to_have_text('')
         state['balance'] = 9
         held.pop().fulfill(json=dict(hint=HINT, balance=9))
-        expect(page.locator('#hint-message')).to_contain_text('残り1マス（難易度点 1）')
+        expect(page.locator('#hint-message')).to_contain_text('残り1マス（難度 1）')
         expect(page.locator('#hint-message')).to_contain_text('1行3列に星を置けます')
         expect(page.locator('.hint-source')).to_have_count(2)
         expect(page.locator('.hint-target')).to_have_count(1)

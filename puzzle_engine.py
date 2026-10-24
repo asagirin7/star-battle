@@ -7,7 +7,7 @@ import threading
 from functools import lru_cache
 from collections import deque
 from logic_solver import logical_result
-from adaptive_difficulty import score_regions, choose_candidate
+from adaptive_difficulty import allows_score, score_regions, choose_candidate
 
 EXPERT_POINTS = 100
 RELAXED_POINTS = 50
@@ -404,6 +404,21 @@ def generate(difficulty, rng=None, timeout=5, streak=0):
                     if score is not None:
                         eligible.append(extra)
                         scores.append(score)
+            # Too hard for the current streak: spend a little more on one
+            # allowed candidate rather than serving a master board early.
+            if scores and not any(allows_score(s, streak) for s in scores):
+                retry_deadline = time.monotonic() + 1
+                for seed in seeds or list(bank):
+                    if time.monotonic() >= retry_deadline:
+                        break
+                    extra = vary_expert(seed, rng, deadline=retry_deadline)
+                    if extra is None:
+                        continue
+                    score = score_regions(extra['regions'], deadline=retry_deadline)
+                    if score is not None and allows_score(score, streak):
+                        eligible.append(extra)
+                        scores.append(score)
+                        break
             result = choose_candidate(eligible, scores, streak, rng) if eligible else fallback
         recent.append(solution_family(result['solution']))
         return certify_generated(result)

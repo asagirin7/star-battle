@@ -7,6 +7,13 @@ from hint_engine import next_hint
 # Immutable region layouts, not stored solutions, identify the scoring cache.
 _scores = OrderedDict()
 SCORE_CACHE_LIMIT = 128
+# Master-rank boards are held back until a long clear streak.
+MASTER_SCORE = 90
+MASTER_STREAK = 10
+
+
+def allows_score(score, streak):
+    return score < MASTER_SCORE or int(streak) >= MASTER_STREAK
 
 
 def score_regions(regions, deadline=None):
@@ -64,6 +71,8 @@ def candidate_weights(scores, streak):
 def choose_candidate(candidates, scores, streak, rng=None):
     if not candidates or len(candidates) != len(scores):
         raise ValueError('Candidates and scores must be nonempty and aligned')
+    pool = [(c, s) for c, s in zip(candidates, scores) if allows_score(s, streak)] or list(zip(candidates, scores))
+    candidates, scores = [c for c, _ in pool], [s for _, s in pool]
     return (rng or random.SystemRandom()).choices(
         candidates, weights=candidate_weights(scores, streak), k=1)[0]
 
@@ -74,5 +83,5 @@ def difficulty_rating(regions):
     if score is None:
         return None
     rank = next(label for ceiling, label in [(29, '入門'), (49, '初級'),
-                (69, '中級'), (89, '上級'), (float('inf'), '達人')] if score <= ceiling)
+                (69, '中級'), (MASTER_SCORE-1, '上級'), (float('inf'), '達人')] if score <= ceiling)
     return {'rank': rank, 'score': score}

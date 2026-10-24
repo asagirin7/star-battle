@@ -304,7 +304,7 @@ $('#hint').onclick=async()=>{
     if(context!==hintContext())return;
     hintDisplay={context,hint:result.hint,game:id,owner,base:hintState()};
     const targets=result.hint.target_cells.map(([r,c])=>`${r+1}行${c+1}列`).join('、');
-    text($('#hint-message'),`${hintLabels[result.hint.technique]||result.hint.technique}（難易度点 ${result.hint.points}）\n${result.hint.explanation}\n次の一手：${targets}に${result.hint.action==='star'?'星を置けます':'×を付けられます'}。`);
+    text($('#hint-message'),`${hintLabels[result.hint.technique]||result.hint.technique}（難度 ${result.hint.points}）\n${result.hint.explanation}\n次の一手：${targets}に${result.hint.action==='star'?'星を置けます':'×を付けられます'}。`);
     $('#hint-legend').hidden=false;
   }catch(e){
     if(context===hintContext())text($('#hint-message'),e.message);
@@ -418,7 +418,7 @@ function render() {
   }
   const rating=puzzle.difficulty_rating;
   $('#difficulty-rating').hidden=puzzle.difficulty!=='expert';
-  text($('#difficulty-rating'),rating?`難易度 ${rating.rank} · ${rating.score}点`:'難易度 未判定');
+  text($('#difficulty-rating'),rating?`${rating.rank} · 難度 ${rating.score}`:'難度 未判定');
   const regionStatus=$('#region-status');
   if(regionStatus.dataset.puzzle!==puzzle.id){
     regionStatus.dataset.puzzle=puzzle.id;regionStatus.style.setProperty('--regions',n);

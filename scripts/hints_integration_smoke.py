@@ -28,7 +28,7 @@ with sync_playwright() as p:
         game = page.request.get(BASE_URL+'/api/games/current').json()
         page.locator('#hint').click()
         expect(page.locator('#hint-balance')).to_have_text('残り 9 回')
-        expect(page.locator('#hint-message')).to_contain_text('難易度点')
+        expect(page.locator('#hint-message')).to_contain_text('難度')
         assert 'single_candidate' not in page.locator('#hint-message').inner_text()
         assert page.locator('.hint-target').count() > 0
         assert not page.request.get(BASE_URL+'/api/games/'+game['id']).json()['stars']
@@ -37,7 +37,7 @@ with sync_playwright() as p:
         page.reload()
         expect(page.locator('.cell')).to_have_count(36)
         page.locator('#hint').click()
-        expect(page.locator('#hint-message')).to_contain_text('難易度点')
+        expect(page.locator('#hint-message')).to_contain_text('難度')
         assert attempts[-1]['request_id'] == first['request_id']
         expect(page.locator('#hint-balance')).to_have_text('残り 9 回')
         assert page.request.get(BASE_URL+'/api/me').json()['hints'] == 9
