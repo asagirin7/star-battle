@@ -7,7 +7,10 @@ import threading
 from functools import lru_cache
 from collections import deque
 from logic_solver import logical_result
-from adaptive_difficulty import allows_score, score_regions, choose_candidate
+from adaptive_difficulty import allows_score, score_regions, choose_candidate, target_score
+
+# Close enough to the streak target to stop walking (about half a rank).
+WALK_TOLERANCE = 8
 
 EXPERT_POINTS = 100
 RELAXED_POINTS = 50
@@ -382,7 +385,7 @@ def generate(difficulty, rng=None, timeout=5, streak=0):
             # Extra work shares the normal generation's original time budget.
             # Unselected candidates are discarded, so selection changes the
             # distribution, rather than merely reordering a mandatory queue.
-            deadline = min(started + timeout, time.monotonic() + .4)
+            deadline = min(started + timeout, time.monotonic() + .8)
             fallback = result
             candidates = [result]
             initial_score = score_regions(result['regions'], deadline=deadline)
@@ -392,18 +395,38 @@ def generate(difficulty, rng=None, timeout=5, streak=0):
                      if solution_family(item['solution']) not in recent
                      and solution_family(item['solution']) != solution_family(result['solution'])]
             rng.shuffle(seeds)
-            for seed in seeds:
-                if any(solution_family(seed['solution']) == solution_family(item['solution']) for item in candidates):
-                    continue
-                if len(candidates) >= 3 or time.monotonic() >= deadline:
+            # Several region variations per seed are fine: the streak target
+            # needs a spread of scores, not distinct star layouts. A fresh
+            # bank with no other family varies the generated board itself.
+            sources = seeds or [result]
+            for attempt in range(12):
+                if len(candidates) >= 6 or time.monotonic() >= deadline:
                     break
-                extra = vary_expert(seed, rng, deadline=deadline)
-                if extra is not None:
+                extra = vary_expert(sources[attempt % len(sources)], rng, deadline=deadline)
+                if extra is not None and all(extra['fingerprint'] != item['fingerprint'] for item in candidates):
                     candidates.append(extra)
                     score = score_regions(extra['regions'], deadline=deadline)
                     if score is not None:
                         eligible.append(extra)
                         scores.append(score)
+            # Variations stay close to their seed's score, so walk from the
+            # candidate nearest the streak target towards that target.
+            if scores:
+                target = target_score(streak)
+                walk_deadline = min(started + timeout, time.monotonic() + .6)
+                nearest = min(range(len(scores)), key=lambda i: abs(scores[i]-target))
+                base, distance = eligible[nearest], abs(scores[nearest]-target)
+                while distance > WALK_TOLERANCE and time.monotonic() < walk_deadline:
+                    extra = vary_expert(base, rng, deadline=walk_deadline)
+                    if extra is None or any(extra['fingerprint'] == item['fingerprint'] for item in eligible):
+                        continue
+                    score = score_regions(extra['regions'], deadline=walk_deadline)
+                    if score is None or not allows_score(score, streak):
+                        continue
+                    eligible.append(extra)
+                    scores.append(score)
+                    if abs(score-target) < distance:
+                        base, distance = extra, abs(score-target)
             # Too hard for the current streak: spend a little more on one
             # allowed candidate rather than serving a master board early.
             if scores and not any(allows_score(s, streak) for s in scores):

@@ -58,14 +58,25 @@ def score_regions(regions, deadline=None):
     return total
 
 
+# Each three-win step aims one rank higher: 入門 at 0, 初級 at 3, 中級 at 6,
+# 上級 at 9 and 達人 from 12 wins.
+TARGET_BASE = 20
+TARGET_PER_WIN = 20 / 3
+TARGET_MAX = 105
+# The candidate nearest the target is favoured most; each next-nearest
+# distance gets this fraction of the previous weight, so streaks stay soft.
+DECAY = .3
+
+
+def target_score(streak):
+    return min(TARGET_MAX, TARGET_BASE + TARGET_PER_WIN * max(0, int(streak)))
+
+
 def candidate_weights(scores, streak):
-    """Tied scores have tied weights; at 20 wins high/low weight is only 1.8."""
-    low, high = min(scores), max(scores)
-    # Dense rank avoids uncalibrated score gaps dominating the distribution.
-    levels = sorted(set(scores))
-    strength = .04 * max(0, min(int(streak), 20))
-    return [1 + strength * (levels.index(s)/(len(levels)-1) if low != high else 0)
-            for s in scores]
+    """Tied scores have tied weights; nearer the streak target weighs more."""
+    target = target_score(streak)
+    distances = sorted({abs(s - target) for s in scores})
+    return [DECAY ** distances.index(abs(s - target)) for s in scores]
 
 
 def choose_candidate(candidates, scores, streak, rng=None):

@@ -14,19 +14,22 @@ def boards():
             if row['level'] == 'expert']
 
 
-def test_weights_are_soft_monotone_tie_and_order_invariant():
-    assert adaptive.candidate_weights([10, 20, 30], 0) == [1, 1, 1]
-    assert adaptive.candidate_weights([10, 20, 30], 20) == [1, 1.4, 1.8]
-    assert adaptive.candidate_weights([30, 10, 20, 20], 20) == [1.8, 1, 1.4, 1.4]
+def test_streak_target_climbs_one_rank_per_three_wins():
+    assert [adaptive.target_score(s) for s in [-1, 0, 3, 6, 9, 12, 30]] == [20, 20, 40, 60, 80, 100, 105]
+
+
+def test_weights_favour_nearest_score_with_ties_and_soft_tail():
+    assert adaptive.candidate_weights([20, 40, 60], 0) == [1, .3, .3**2]
+    assert adaptive.candidate_weights([60, 20, 40, 40], 3) == [.3, .3, 1, 1]
     assert adaptive.candidate_weights([10, 10], 20) == [1, 1]
-    assert adaptive.candidate_weights([10, 20], 200) == [1, 1.8]
-    assert adaptive.candidate_weights([10, 20], -1) == [1, 1]
     means = []
-    for streak in [0, 5, 10, 20]:
+    for streak in [0, 3, 6, 9]:
         rng = random.Random(42)
-        draws = [adaptive.choose_candidate([10,20,30], [10,20,30], streak, rng) for _ in range(20000)]
+        draws = [adaptive.choose_candidate([20,40,60,80], [20,40,60,80], streak, rng) for _ in range(20000)]
         means.append(sum(draws)/len(draws))
-        assert 0.2 < draws.count(10)/len(draws) < 0.36
+        # The nearest board dominates, but others still appear.
+        assert 0.5 < draws.count(adaptive.target_score(streak))/len(draws) < 0.8
+        assert len(set(draws)) == 4
     assert means == sorted(means) and len(set(means)) == 4
 
 
@@ -83,6 +86,7 @@ def test_generator_selects_final_candidate_and_only_records_selected_family(monk
         measured.append(regions)
         return len(measured)*10
     monkeypatch.setattr(engine, 'score_regions', score)
+    monkeypatch.setattr(engine, 'WALK_TOLERANCE', 1000)
     selected = []
     def choose(candidates, scores, streak, rng):
         assert streak == 7 and scores == [10,20,30]
