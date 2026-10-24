@@ -377,6 +377,9 @@ function render() {
       board.append(button);
     }
   }
+  const rating=puzzle.difficulty_rating;
+  $('#difficulty-rating').hidden=puzzle.difficulty!=='expert';
+  text($('#difficulty-rating'),rating?`難易度 ${rating.rank} · ${rating.score}点`:'難易度 未判定');
   const regionStatus=$('#region-status');
   if(regionStatus.dataset.puzzle!==puzzle.id){
     regionStatus.dataset.puzzle=puzzle.id;regionStatus.style.setProperty('--regions',n);
@@ -604,7 +607,7 @@ $('#account-form').onsubmit=async event=>{
     if(accountMode==='register'&&!await migrateGuestMemos())warning='登録しました。一部のメモはこの端末に残っています。元の端末でその盤面を開くと再同期します。';
     profileView();$('#account-form').reset();$('#account-dialog').close();
     if(previous===me.id&&game){memoBase=game.memos||Array(cells.length).fill(0);await flushMemos();}
-    else{input.reset();game=null;puzzle=null;cells=[];undo=[];moveQueue=[];memoBase=[];pendingStart=null;$('#region-status').replaceChildren();delete $('#region-status').dataset.puzzle;}
+    else{input.reset();game=null;puzzle=null;cells=[];undo=[];moveQueue=[];memoBase=[];pendingStart=null;$('#difficulty-rating').hidden=true;$('#region-status').replaceChildren();delete $('#region-status').dataset.puzzle;}
     if(sharedId)await startShared();else if(!game)await resumeOrChoose();
     status(warning||'ログインしました。別端末でも同じIDで続けられます。',true);
   }catch(e){if(me?.username){profileView();accountView();}$('#account-error').textContent=e.message;}

@@ -81,6 +81,7 @@ def test_all_unscored_candidates_keep_valid_normal_fallback(monkeypatch):
 
 
 def test_api_uses_server_streak_only_for_new_expert(monkeypatch):
+    adaptive._scores.clear()
     import uuid
     import main
     from fastapi.testclient import TestClient
@@ -116,6 +117,8 @@ def test_api_uses_server_streak_only_for_new_expert(monkeypatch):
         assert client.post(f"/api/games/{game['id']}/retry", json={}).status_code == 200
         assert len(calls) == count
         assert 'solution' not in game['puzzle']
+        assert game['puzzle']['difficulty_rating']['rank'] in ['入門','初級','中級','上級','達人']
+        assert type(game['puzzle']['difficulty_rating']['score']) is int
     database.dispose()
 
 
@@ -124,3 +127,12 @@ def test_extra_variation_honors_expired_budget(monkeypatch):
         raise AssertionError('No solving work after expired deadline')
     monkeypatch.setattr(engine, 'solutions', forbidden)
     assert engine.vary_expert(boards()[0], random.Random(7), deadline=time.monotonic()-1) is None
+
+
+def test_five_rating_boundaries(monkeypatch):
+    for score, rank in [(0,'入門'),(29,'入門'),(30,'初級'),(49,'初級'),
+                        (50,'中級'),(69,'中級'),(70,'上級'),(89,'上級'),(90,'達人'),(108,'達人')]:
+        monkeypatch.setattr(adaptive, 'score_regions', lambda *a, **kw: score)
+        assert adaptive.difficulty_rating([]) == {'rank':rank,'score':score}
+    monkeypatch.setattr(adaptive, 'score_regions', lambda *a, **kw: None)
+    assert adaptive.difficulty_rating([]) is None

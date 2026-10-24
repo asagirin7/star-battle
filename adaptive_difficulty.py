@@ -66,3 +66,13 @@ def choose_candidate(candidates, scores, streak, rng=None):
         raise ValueError('Candidates and scores must be nonempty and aligned')
     return (rng or random.SystemRandom()).choices(
         candidates, weights=candidate_weights(scores, streak), k=1)[0]
+
+
+def difficulty_rating(regions):
+    """Provisional five ranks for normal 9x9 rule scores."""
+    score = score_regions(regions, deadline=time.monotonic() + .4)
+    if score is None:
+        return None
+    rank = next(label for ceiling, label in [(29, '入門'), (49, '初級'),
+                (69, '中級'), (89, '上級'), (float('inf'), '達人')] if score <= ceiling)
+    return {'rank': rank, 'score': score}

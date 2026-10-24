@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from special_boards import load_boards
 from hint_wallet import wallet_for_launch
 from hint_engine import next_hint
+from adaptive_difficulty import difficulty_rating
 from streaks import derive_streaks
 from config import database_url
 from models import Account, Clear, Game, GameMemo, HintUse, HintWallet, LoginSession, Move, Player, PlayerMerge, Puzzle, ReplayResult
@@ -223,6 +224,7 @@ def me(launch: bool = True, p: Player = Depends(player), session: Session = Depe
 def puzzle_view(puzzle):
     return dict(id=puzzle.id, size=puzzle.size, difficulty=puzzle.difficulty,
                 points=clear_points(puzzle.size, 0, puzzle.difficulty), multiplier=multiplier(puzzle.size),
+                difficulty_rating=difficulty_rating(puzzle.regions) if puzzle.difficulty == 'expert' else None,
                 initial_lives=life_limit(puzzle.size), scoring='fixed' if puzzle.size == 9 else 'lives', regions=puzzle.regions)
 
 
