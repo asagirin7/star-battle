@@ -11,6 +11,32 @@ let launchPending=false,launchRefreshing=false,accountRefreshing=false;
 let accountMode='register',sharedId=new URLSearchParams(location.search).get('p');
 let memoBase=[],memoTimer=null,memoPromise=null;
 let sharedClearId=new URLSearchParams(location.search).get('c'),shareMessage='';
+const audibleMoves=new Set();
+let soundEnabled=true,audioContext=null,lastEffectAt=-1;
+try{soundEnabled=localStorage.getItem('star-sound')!=='false';}catch{}
+function soundView(){text($('#sound-toggle'),`効果音 ${soundEnabled?'ON':'OFF'}`);attribute($('#sound-toggle'),'aria-pressed',String(soundEnabled));}
+function unlockAudio(){
+  if(!soundEnabled||document.hidden)return;
+  try{const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;audioContext ||= new Audio();if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});}catch{}
+}
+function playEffect(kind){
+  if(!soundEnabled||document.hidden||!audioContext||audioContext.state!=='running')return;
+  const now=audioContext.currentTime;if(kind==='cross'&&now-lastEffectAt<.065)return;lastEffectAt=now;
+  try{
+    const oscillator=audioContext.createOscillator(),gain=audioContext.createGain();
+    oscillator.type=kind==='star'?'sine':'triangle';
+    oscillator.frequency.setValueAtTime(kind==='star'?760:380,now);
+    oscillator.frequency.exponentialRampToValueAtTime(kind==='star'?1140:170,now+.045);
+    gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(kind==='star'?.07:.035,now+.004);gain.gain.exponentialRampToValueAtTime(.0001,now+.085);
+    oscillator.connect(gain);gain.connect(audioContext.destination);oscillator.start(now);oscillator.stop(now+.09);
+    oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();};
+  }catch{}
+}
+document.addEventListener('pointerdown',unlockAudio,{capture:true});
+document.addEventListener('keydown',unlockAudio,{capture:true});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)try{audioContext?.suspend().catch(()=>{});}catch{}});
+$('#sound-toggle').onclick=()=>{soundEnabled=!soundEnabled;try{localStorage.setItem('star-sound',String(soundEnabled));}catch{}if(soundEnabled)unlockAudio();else try{audioContext?.suspend().catch(()=>{});}catch{}soundView();};
+soundView();
 const dismissedResults=new Set();
 const memoValue=v=>v===2||v===3?v:0;
 function baseKey(){return savedKey()+':synced';}
@@ -269,8 +295,6 @@ function gameMessage() {
 function controls() {
   const changing=busy||hintLoading||launchRefreshing||sending||moveQueue.length>0;
   for(const selector of ['#retry-board','#overlay-retry','#advance','#overlay-next', '[data-level="easy"]','[data-level="medium"]','[data-level="hard"]','[data-level="expert"]']) disabled($(selector),changing);
-  disabled($('#undo'),busy||hintLoading||launchRefreshing||ended()||!undo.length);
-  disabled($('#reset'),busy||hintLoading||launchRefreshing||ended());
   disabled($('#hint'),changing||ended()||!me||!(me.hints>0));
   disabled($('#auto-cross'),hintLoading);
   $('#retry-moves').hidden=!moveQueue.length||sending;
@@ -353,6 +377,19 @@ function render() {
       board.append(button);
     }
   }
+  const regionStatus=$('#region-status');
+  if(regionStatus.dataset.puzzle!==puzzle.id){
+    regionStatus.dataset.puzzle=puzzle.id;regionStatus.style.setProperty('--regions',n);
+    regionStatus.replaceChildren(...Array.from({length:n},(_,region)=>{
+      const chip=document.createElement('span');chip.style.background=colors[region];chip.className='region-chip';return chip;
+    }));
+  }
+  const occupied=new Set(game.stars.map(([r,c])=>puzzle.regions[r][c]));
+  [...regionStatus.children].forEach((chip,region)=>{
+    const placed=occupied.has(region);text(chip,`${region+1} ${placed?'★':'○'}`);
+    attribute(chip,'aria-label',`エリア${region+1}、${placed?'星を配置済み':'星は未配置'}`);
+    chip.classList.toggle('placed',placed);
+  });
   cells.forEach((_,i)=>renderCell(board.children[i],i));
   controls();updateTimer();
 }
@@ -366,6 +403,7 @@ function autoMark(stars=game.stars,skip=new Set()){
 function star(i) {
   if(!mutable(i))return;
   moveQueue.push({row:Math.floor(i/puzzle.size),col:i%puzzle.size,request_id:requestId()});
+  audibleMoves.add(moveQueue[moveQueue.length-1].request_id);
   saveQueue();render();pumpMoves();
 }
 async function pumpMoves() {
@@ -382,6 +420,7 @@ async function pumpMoves() {
       if(justCleared)celebrate(result.game,previousPoints);
       profileView();applyGame(result.game,false,false);
       const index=move.row*puzzle.size+move.col,prev=memoSnapshot();
+      if(audibleMoves.delete(move.request_id)&&result.correct)playEffect('star');
       if(result.correct)autoMark([[move.row,move.col]],new Set(move.suppressed||[]));else cells[index]=2;
       commit(prev);
       if(!result.correct){
@@ -402,7 +441,7 @@ async function pumpMoves() {
 }
 const input=attachBoardInput($('#board'),{
   blocked:()=>busy||hintLoading||launchRefreshing||ended(),size:()=>puzzle.size,value:i=>waiting(i)?1:visibleValue(i),mutable,
-  snapshot:memoSnapshot,paint:paintMemo,
+  snapshot:memoSnapshot,paint:(i,value)=>{const previous=cells[i];paintMemo(i,value);if(value===2&&cells[i]===2&&previous!==2)playEffect('cross');},
   flag:i=>{const prev=memoSnapshot();paintMemo(i,cells[i]===3?0:3);commit(prev);},
   render:()=>render(),commit,
   restoreFirstTap:(base,i)=>{
@@ -445,14 +484,9 @@ function undoMemo(){
   if(busy||hintLoading||launchRefreshing||!undo.length||ended())return;
   input.reset();restoreMemos(undo.pop());save();render();
 }
-$('#undo').onclick=undoMemo;
 document.addEventListener('keydown',event=>{
   if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.target.closest('input,textarea,[contenteditable]')){event.preventDefault();undoMemo();}
 });
-$('#reset').onclick=()=>{
-  if(busy||hintLoading||launchRefreshing||ended())return;
-  input.reset();const prev=memoSnapshot();for(let i=0;i<cells.length;i++)paintMemo(i,0);commit(prev);status('メモを消しました。残機と確定した星はそのままです。');
-};
 $('#auto-cross').onclick=()=>{
   autoCross=!autoCross;try{localStorage.setItem('star-auto-cross',String(autoCross));}catch{}
   if(game&&!ended()){input.reset();const prev=memoSnapshot();autoMark();commit(prev);}else if(game)render();
@@ -570,7 +604,7 @@ $('#account-form').onsubmit=async event=>{
     if(accountMode==='register'&&!await migrateGuestMemos())warning='登録しました。一部のメモはこの端末に残っています。元の端末でその盤面を開くと再同期します。';
     profileView();$('#account-form').reset();$('#account-dialog').close();
     if(previous===me.id&&game){memoBase=game.memos||Array(cells.length).fill(0);await flushMemos();}
-    else{input.reset();game=null;puzzle=null;cells=[];undo=[];moveQueue=[];memoBase=[];pendingStart=null;}
+    else{input.reset();game=null;puzzle=null;cells=[];undo=[];moveQueue=[];memoBase=[];pendingStart=null;$('#region-status').replaceChildren();delete $('#region-status').dataset.puzzle;}
     if(sharedId)await startShared();else if(!game)await resumeOrChoose();
     status(warning||'ログインしました。別端末でも同じIDで続けられます。',true);
   }catch(e){if(me?.username){profileView();accountView();}$('#account-error').textContent=e.message;}

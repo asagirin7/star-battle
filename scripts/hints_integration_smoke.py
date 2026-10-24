@@ -49,7 +49,7 @@ with sync_playwright() as p:
         expect(page.locator('#hint-message')).to_contain_text('消費なし')
         expect(page.locator('#hint-balance')).to_have_text('残り 9 回')
         assert page.request.get(BASE_URL+'/api/me').json()['hints'] == 9
-        page.locator('#reset').click()
+        page.locator('.cell').nth(cols[0]).click()
         for r, c in enumerate(cols):
             response = page.request.post(BASE_URL+f"/api/games/{game['id']}/stars", data=dict(row=r,col=c,request_id=str(uuid.uuid4())))
             assert response.ok, response.text()

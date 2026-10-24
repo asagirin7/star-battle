@@ -92,7 +92,7 @@ with sync_playwright() as p:
         for i in range(6,12):expect(page.locator('.cell').nth(i)).to_have_text('')
         stroke(12,17,cancel=True)
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 3、ミス 0回')
-        page.locator('#reset').click();page.locator('#board').scroll_into_view_if_needed()
+        page.evaluate('''() => {const prev=memoSnapshot();for(let i=0;i<cells.length;i++)paintMemo(i,0);commit(prev);}''');page.locator('#board').scroll_into_view_if_needed()
         before=geometry(page)
         # Confirmed star response must preserve the same cell nodes and dimensions.
         double(cols[0])
@@ -105,7 +105,7 @@ with sync_playwright() as p:
             if i==cols[0]:continue
             forbidden=r==0 or c==cols[0] or game['puzzle']['regions'][r][c]==game['puzzle']['regions'][0][cols[0]] or (r<=1 and abs(c-cols[0])<=1)
             if forbidden:expect(page.locator('.cell').nth(i)).to_have_text('×')
-        page.locator('#auto-cross').click();page.locator('#reset').click()
+        page.locator('#auto-cross').click();page.evaluate('''() => {const prev=memoSnapshot();for(let i=0;i<cells.length;i++)paintMemo(i,0);commit(prev);}''')
         page.locator('#board').scroll_into_view_if_needed();before=geometry(page)
         # Slow responses cannot block local notes or lose later star gestures.
         cdp.send('Network.enable')

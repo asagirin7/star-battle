@@ -94,7 +94,7 @@ with sync_playwright() as p:
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.locator('.cell').first.click()
         expect(page.locator('.cell').first).to_have_text('×')
-        page.get_by_role('button',name='メモを1手戻す').click()
+        page.keyboard.press('Control+z')
         expect(page.locator('.cell').first).to_have_text('')
         game=page.request.get(BASE_URL+'/api/games/current').json()
         n=game['puzzle']['size']
@@ -103,7 +103,6 @@ with sync_playwright() as p:
         move(page,0,wrong,n)
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 2、ミス 1回')
         move(page,0,cols[0],n)
-        page.locator('#reset').click()
         page.reload()
         page.locator('.cell').first.wait_for()
         expect(page.locator('#lives')).to_have_attribute('aria-label','残機 2、ミス 1回')
