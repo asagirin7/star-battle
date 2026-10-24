@@ -202,3 +202,38 @@ def test_expert_clear_awards_rank_points(monkeypatch):
         assert result['game']['completed'] and result['game']['score'] == expected
         assert client.get('/api/me').json()['points'] == expected
     database.dispose()
+
+
+def test_rank_weights_step_one_rank_per_three_wins_and_hold_master():
+    all_ranks = adaptive.RANKS
+    assert adaptive.rank_weights(all_ranks, 0) == {'入門':1, '初級':.3, '中級':.3**2, '上級':.3**3}
+    assert max(adaptive.rank_weights(all_ranks, 6).items(), key=lambda kv: kv[1])[0] == '中級'
+    assert max(adaptive.rank_weights(all_ranks, 9).items(), key=lambda kv: kv[1])[0] == '上級'
+    assert '達人' not in adaptive.rank_weights(all_ranks, 9)
+    assert max(adaptive.rank_weights(all_ranks, 12).items(), key=lambda kv: kv[1])[0] == '達人'
+    # Only master boards ready: still serve one rather than nothing.
+    assert adaptive.rank_weights(['達人'], 0) == {'達人': .3**4}
+
+
+def test_pooled_boards_follow_streak_rank(monkeypatch):
+    pool = {rank: engine.deque() for rank in adaptive.RANKS}
+    monkeypatch.setattr(engine, '_pool', pool)
+    rng = random.Random(5)
+    def refill():
+        for rank in adaptive.RANKS:
+            while len(pool[rank]) < 2:
+                pool[rank].append({'rank': rank})
+    picks = {}
+    for streak in [0, 6, 12]:
+        drawn = []
+        for _ in range(400):
+            refill()
+            drawn.append(engine.take_pooled(streak, rng)['rank'])
+        picks[streak] = max(set(drawn), key=drawn.count)
+        assert drawn.count(picks[streak]) / len(drawn) > .55
+        if streak < 10:
+            assert '達人' not in drawn
+    assert picks == {0: '入門', 6: '中級', 12: '達人'}
+    for rank in adaptive.RANKS:
+        pool[rank].clear()
+    assert engine.take_pooled(12, rng) is None

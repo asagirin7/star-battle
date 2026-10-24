@@ -344,6 +344,7 @@ async function choose(next=false) {
     let state=next?null:await api(`games/current?difficulty=${level}`);
     if(!state){
       if(!pendingStart||pendingStart.difficulty!==level)pendingStart={difficulty:level,request_id:requestId()};
+      $('#board-loading').hidden=false;
       state=await api('games',pendingStart);pendingStart=null;
     }
     applyGame(state,true);gameMessage();
@@ -351,7 +352,7 @@ async function choose(next=false) {
     if(previousLevel)level=previousLevel;
     document.querySelectorAll('[data-level]').forEach(b=>b.classList.toggle('selected',(b.dataset.level===level||(b.dataset.level==='expert'&&level==='expert_relaxed'))));
     status(e.message);
-  }finally{busy=false;controls();}
+  }finally{busy=false;$('#board-loading').hidden=true;controls();}
   if(moveQueue.length)pumpMoves();
 }
 function renderCell(button,i) {

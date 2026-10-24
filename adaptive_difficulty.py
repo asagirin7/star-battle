@@ -88,6 +88,18 @@ def choose_candidate(candidates, scores, streak, rng=None):
         candidates, weights=candidate_weights(scores, streak), k=1)[0]
 
 
+RANKS = ['入門', '初級', '中級', '上級', '達人']
+
+
+def rank_weights(ranks, streak):
+    """Weights for ready boards of these ranks: the rank three wins per step
+    above 入門 weighs 1, each rank away gets DECAY times less. 達人 waits for
+    a ten-clear streak whenever another rank is available."""
+    target = min(len(RANKS)-1, max(0, int(streak)) // 3)
+    allowed = [r for r in ranks if r != '達人' or int(streak) >= MASTER_STREAK] or list(ranks)
+    return {r: DECAY ** abs(RANKS.index(r) - target) for r in allowed}
+
+
 # No-miss clear points of a normal 9x9 board by rank.
 RANK_POINTS = {'入門': 100, '初級': 150, '中級': 200, '上級': 250, '達人': 300}
 UNRATED_POINTS = 100

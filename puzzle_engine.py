@@ -1,13 +1,14 @@
 """Generate connected, uniquely solvable puzzles on demand; never send solutions."""
 import hashlib
 import json
+import os
 import random
 import time
 import threading
 from functools import lru_cache
 from collections import deque
 from logic_solver import logical_result
-from adaptive_difficulty import allows_score, score_regions, choose_candidate, target_score
+from adaptive_difficulty import allows_score, score_regions, choose_candidate, target_score, rank_for, rank_weights, RANKS
 
 # Close enough to the streak target to stop walking (about half a rank).
 WALK_TOLERANCE = 8
@@ -260,6 +261,67 @@ _expert_seeds = {}
 _recent_families = {}
 _generation_counts = {}
 
+# Ready normal 9x9 boards by rank. Scoring a board takes seconds on the
+# free-tier CPU, too slow to search for a streak's rank inside a request, so a
+# background thread keeps a few certified boards of every rank.
+POOL_PER_RANK = 2
+_pool_lock = threading.Lock()
+_pool = {rank: deque() for rank in RANKS}
+_pool_wanted = threading.Event()
+_pool_thread = None
+
+
+def pool_enabled():
+    return os.getenv('EXPERT_POOL', '1') != '0'
+
+
+def start_expert_pool():
+    global _pool_thread
+    if not pool_enabled():
+        return
+    with _pool_lock:
+        if _pool_thread is not None:
+            return
+        _pool_thread = threading.Thread(target=_fill_pool, name='expert-pool', daemon=True)
+        _pool_thread.start()
+
+
+def _fill_pool():
+    while True:
+        with _pool_lock:
+            full = all(len(boards) >= POOL_PER_RANK for boards in _pool.values())
+        if full:
+            _pool_wanted.wait(30)
+            _pool_wanted.clear()
+            continue
+        started = time.monotonic()
+        try:
+            board = generate('expert', select=False)
+            score = score_regions(board['regions'])
+        except Exception:
+            time.sleep(1)
+            continue
+        if score is not None:
+            with _pool_lock:
+                ready = _pool[rank_for(score)]
+                if len(ready) < POOL_PER_RANK and all(item['fingerprint'] != board['fingerprint'] for item in ready):
+                    ready.append(board)
+        # Leave about half the CPU to requests.
+        time.sleep(min(2, time.monotonic() - started))
+
+
+def take_pooled(streak, rng):
+    with _pool_lock:
+        weights = rank_weights([rank for rank, boards in _pool.items() if boards], streak)
+        if not weights:
+            board = None
+        else:
+            ranks = list(weights)
+            rank = rng.choices(ranks, weights=[weights[r] for r in ranks], k=1)[0]
+            board = _pool[rank].popleft()
+    _pool_wanted.set()
+    return board
+
 
 def vary_expert(seed, rng, deadline=None):
     """Walk between unique boards, retaining connectivity and area constraints."""
@@ -349,10 +411,16 @@ def seed_expert(puzzle):
             bank.append(puzzle)
 
 
-def generate(difficulty, rng=None, timeout=5, streak=0):
+def generate(difficulty, rng=None, timeout=5, streak=0, select=True):
     if rng is not None or not difficulty.startswith('expert'):
         return certify_generated(_generate(difficulty,rng,timeout))
     rng = random.SystemRandom()
+    if difficulty == 'expert' and select:
+        pooled = take_pooled(streak, rng)
+        if pooled is not None:
+            with _expert_lock:
+                _recent_families.setdefault(difficulty,deque(maxlen=6)).append(solution_family(pooled['solution']))
+            return certify_generated(pooled)
     started = time.monotonic()
     with _expert_lock:
         bank = _expert_seeds.setdefault(difficulty,deque(maxlen=32))
@@ -381,7 +449,7 @@ def generate(difficulty, rng=None, timeout=5, streak=0):
         if result is None:
             result = certify_generated(_generate(difficulty,timeout=timeout))
         bank.append(result)
-        if difficulty == 'expert':
+        if difficulty == 'expert' and select:
             # Extra work shares the normal generation's original time budget.
             # Unselected candidates are discarded, so selection changes the
             # distribution, rather than merely reordering a mandatory queue.

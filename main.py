@@ -25,7 +25,7 @@ from config import database_url
 from models import Account, Clear, Game, GameMemo, HintUse, HintWallet, LoginSession, Move, Player, PlayerMerge, Puzzle, ReplayResult
 from authentication import DUMMY_HASH, issue_session, password_hash, password_matches, throttle
 from puzzle_engine import (
-    LEVELS, InvalidPuzzle, certify_generated, checked_solution, clear_points,
+    LEVELS, InvalidPuzzle, certify_generated, checked_solution, clear_points, start_expert_pool,
     generate, life_limit, multiplier, needs_seed, seed_expert, valid_stars,
 )
 
@@ -464,6 +464,8 @@ def start(body: Start, p: Player = Depends(player), session: Session = Depends(d
                                  .order_by(func.random()).limit(12))
         for item in stored:
             seed_expert(dict(size=item.size, difficulty=item.difficulty, regions=item.regions, solution=item.solution))
+    if body.difficulty == 'expert':
+        start_expert_pool()
     streak = derive_streaks(session, p.id)['expert'] if body.difficulty == 'expert' else 0
     for _ in range(5):
         try:
