@@ -57,8 +57,29 @@ with httpx.Client(base_url=BASE_URL,timeout=30) as c:
     assert c.get('/api/me').json()['points']==2
     official=c.get('/api/clears/'+cleared['clear_id']).json()
     assert official['retries']==1 and official['points']==0
-    assert c.post(f"/api/games/{retry['id']}/retry",json={}).status_code==409
-    print('PASS: concurrent explicit retry creates one trial; retry clear awards zero and shares official count')
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        replays=list(executor.map(lambda _: c.post(f"/api/games/{retry['id']}/retry",json={}),range(8)))
+    assert all(r.status_code==200 for r in replays),[r.text for r in replays]
+    assert len({r.json()['id'] for r in replays})==1
+    replay=replays[0].json()
+    assert replay['retries']==2 and not replay['completed'] and not replay['stars']
+    assert replay['puzzle']==retry['puzzle']
+    replay_url=f"/api/games/{replay['id']}/stars"
+    for row,col in list(enumerate(cols))[:-1]:
+        c.post(replay_url,json={'row':row,'col':col,'request_id':nonce()}).raise_for_status()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        finishes=list(executor.map(lambda _: c.post(replay_url,json={'row':5,'col':cols[5],'request_id':nonce()}),range(8)))
+    assert all(r.status_code==200 for r in finishes),[r.text for r in finishes]
+    results=[r.json()['game'] for r in finishes]
+    assert all(r['completed'] and r['score']==0 for r in results)
+    assert len({r['clear_id'] for r in results})==1
+    assert results[0]['clear_id']!=cleared['clear_id']
+    replay_official=c.get('/api/clears/'+results[0]['clear_id']).json()
+    assert replay_official['retries']==2 and replay_official['points']==0
+    assert c.get('/api/clears/'+cleared['clear_id']).json()==official
+    assert c.get('/api/me').json()['points']==2
+    assert len(c.get('/api/history').json())==2
+    print('PASS: concurrent failure/success retries create one successor; concurrent replay completion shares one independent zero-point result')
     fresh=c.post('/api/games',json={'difficulty':'easy','request_id':nonce()}).json()
     with ThreadPoolExecutor(max_workers=8) as executor:
         launches=list(executor.map(lambda _:c.get('/api/me'),range(8)))
